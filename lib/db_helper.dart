@@ -187,4 +187,8 @@ class DBHelper {
     final db = await database;
     return await db.query('context_logs', orderBy: 'id DESC');
   }
+  Future<int> deleteObjectLocation(int id) async {
+    final db = await database;
+    return await db.delete('object_locations', where: 'id = ?', whereArgs: [id]);
+  }
 }
