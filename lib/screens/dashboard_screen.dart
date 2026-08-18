@@ -1,18 +1,14 @@
 // =====================================================================
-// dashboard_screen.dart — the "home" tab. Shows today's reminders.
+// dashboard_screen.dart — the "home" tab. Shows today's reminders,
+// upcoming reminders, and recent notes at a glance.
 //
-// AUG 14 UPDATE: this now actually reads from and writes to the real
-// local database (db_helper.dart), instead of showing fake text.
-// This proves the database chain works end-to-end: insert -> read ->
-// display on screen.
+// AUG 16 UPDATE: replaces the simple full-list view with organized
+// sections, filtered and sorted by date.
 // =====================================================================
 
 import 'package:flutter/material.dart';
 import '../db_helper.dart';
 
-// Changed from StatelessWidget to StatefulWidget because this screen
-// now needs to hold data (the list of reminders) that can change
-// while the app is running.
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -21,65 +17,125 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // Holds the list of reminders fetched from the database. Starts
-  // empty until we load real data.
-  List<Map<String, dynamic>> _reminders = [];
+  List<Map<String, dynamic>> _todayReminders = [];
+  List<Map<String, dynamic>> _upcomingReminders = [];
+  List<Map<String, dynamic>> _recentNotes = [];
+  bool _loading = true;
 
-  // initState() runs ONCE, automatically, the moment this screen is
-  // first created — a good place to kick off loading data.
   @override
   void initState() {
     super.initState();
-    _loadReminders();
+    _loadDashboardData();
   }
 
-  // Fetches all reminders from the database and, if there aren't any
-  // yet (first time running the app), inserts one test reminder so
-  // you have something to see and verify the database actually works.
-  Future<void> _loadReminders() async {
-    final existing = await DBHelper.instance.getReminders();
+  // Fetches reminders and notes, then sorts them into the sections
+  // this screen displays.
+  Future<void> _loadDashboardData() async {
+    final allReminders = await DBHelper.instance.getReminders();
+    final allNotes = await DBHelper.instance.getNotes();
 
-    if (existing.isEmpty) {
-      // No reminders yet — insert a test one so we can SEE that
-      // writing to the database works.
-      await DBHelper.instance.insertReminder({
-        'task': 'Test reminder from Aug 14 setup',
-        'date': '2026-08-15',
-        'time': '09:00',
-        'priority': 'green',
-        'completed': 0,
-      });
-    }
+    // Today's date as a string in the same YYYY-MM-DD format the
+    // reminders use, so we can compare them directly as text.
+    final today = DateTime.now();
+    final todayString =
+        '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
 
-    // Fetch again (now guaranteed to have at least one row) and
-    // update the screen to show it.
-    final reminders = await DBHelper.instance.getReminders();
+    // Split reminders into "today" (date matches exactly) and
+    // "upcoming" (date is any string that sorts after today's date —
+    // simple text comparison works here since YYYY-MM-DD format sorts
+    // correctly as plain text).
+    final todayList = allReminders
+        .where((r) => r['date'] == todayString)
+        .toList();
 
-    // setState() tells Flutter "the data changed, please redraw."
+    final upcomingList = allReminders
+        .where((r) => r['date'] != null && r['date'].toString().compareTo(todayString) > 0)
+        .toList();
+
+    // Sort upcoming reminders so the soonest date shows first.
+    upcomingList.sort((a, b) => a['date'].toString().compareTo(b['date'].toString()));
+
     setState(() {
-      _reminders = reminders;
+      _todayReminders = todayList;
+      _upcomingReminders = upcomingList;
+      // Only show the 3 most recent notes (they're already sorted
+      // newest-first by db_helper.dart's "ORDER BY id DESC").
+      _recentNotes = allNotes.take(3).toList();
+      _loading = false;
     });
+  }
+
+  // A small reusable header widget used above each section.
+  Widget _sectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+      child: Text(
+        title,
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Dashboard')),
-      body: _reminders.isEmpty
-          // Shown briefly while the database is still loading.
+      body: _loading
           ? const Center(child: CircularProgressIndicator())
-          // ListView.builder efficiently displays a scrollable list —
-          // one row per reminder in _reminders.
-          : ListView.builder(
-              itemCount: _reminders.length,
-              itemBuilder: (context, index) {
-                final reminder = _reminders[index];
-                return ListTile(
-                  leading: const Icon(Icons.notifications),
-                  title: Text(reminder['task']),
-                  subtitle: Text('${reminder['date']} at ${reminder['time']}'),
-                );
-              },
+          // RefreshIndicator adds "pull down to refresh" behavior —
+          // standard on most mobile apps.
+          : RefreshIndicator(
+              onRefresh: _loadDashboardData,
+              child: ListView(
+                children: [
+                  _sectionHeader("Today's Reminders"),
+                  if (_todayReminders.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      child: Text('Nothing due today.'),
+                    )
+                  else
+                    ..._todayReminders.map((r) => ListTile(
+                          leading: const Icon(Icons.notifications_active, color: Colors.green),
+                          title: Text(r['task']),
+                          subtitle: Text('at ${r['time']}'),
+                        )),
+
+                  _sectionHeader('Upcoming Reminders'),
+                  if (_upcomingReminders.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      child: Text('No upcoming reminders.'),
+                    )
+                  else
+                    ..._upcomingReminders.take(5).map((r) => ListTile(
+                          leading: const Icon(Icons.schedule),
+                          title: Text(r['task']),
+                          subtitle: Text('${r['date']} at ${r['time']}'),
+                        )),
+
+                  _sectionHeader('Recent Notes'),
+                  if (_recentNotes.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      child: Text('No notes yet.'),
+                    )
+                  else
+                    ..._recentNotes.map((n) => ListTile(
+                          leading: const Icon(Icons.note),
+                          title: Text(n['title']),
+                          subtitle: Text(
+                            n['content'] ?? '',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis, // adds "..." if text is too long
+                          ),
+                        )),
+
+                  // A bit of empty space at the bottom so the last
+                  // item isn't crowded against the screen edge.
+                  const SizedBox(height: 24),
+                ],
+              ),
             ),
     );
   }
