@@ -6,6 +6,7 @@
 
 import 'package:flutter/material.dart';
 import '../db_helper.dart';
+import '../notification_helper.dart';
 
 class RemindersTab extends StatefulWidget {
   const RemindersTab({super.key});
@@ -73,17 +74,49 @@ class _RemindersTabState extends State<RemindersTab> {
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancel'),
             ),
-            ElevatedButton(
+                       ElevatedButton(
               onPressed: () async {
                 if (taskController.text.trim().isEmpty) return;
 
-                await DBHelper.instance.insertReminder({
+                // Insert the reminder and get back its auto-generated
+                // database id — we need this id to link the
+                // notification to this specific reminder.
+                final id = await DBHelper.instance.insertReminder({
                   'task': taskController.text.trim(),
                   'date': dateController.text.trim(),
                   'time': timeController.text.trim(),
                   'priority': 'green',
                   'completed': 0,
                 });
+
+                // Try to parse the date/time text into a real
+                // DateTime, and schedule a notification for it.
+                // Wrapped in try/catch since the user might type an
+                // invalid date/time format (real parsing from natural
+                // language comes later — for now this expects the
+                // exact YYYY-MM-DD and HH:MM formats from the hints).
+                try {
+                  final dateParts = dateController.text.trim().split('-');
+                  final timeParts = timeController.text.trim().split(':');
+
+                  final scheduledDate = DateTime(
+                    int.parse(dateParts[0]),
+                    int.parse(dateParts[1]),
+                    int.parse(dateParts[2]),
+                    int.parse(timeParts[0]),
+                    int.parse(timeParts[1]),
+                  );
+
+                  await NotificationHelper.instance.scheduleNotification(
+                    id: id,
+                    title: 'Clawd Bot Reminder',
+                    body: taskController.text.trim(),
+                    scheduledDate: scheduledDate,
+                  );
+                  } catch (e) {
+                  // ignore: avoid_print
+                  print('Notification scheduling failed: $e');
+                }
 
                 Navigator.pop(context);
                 _refreshReminders();

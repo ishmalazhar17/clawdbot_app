@@ -12,10 +12,22 @@ import 'screens/dashboard_screen.dart';
 import 'screens/chatbot_screen.dart';
 import 'screens/memory_screen.dart';
 import 'screens/suggestions_screen.dart';
+import 'notification_helper.dart';
 
 // This is the very first function that runs in the whole app.
 // runApp() takes a widget and makes it fill the screen.
-void main() {
+//
+// "async" here lets us "await" the notification setup BEFORE the app
+// actually starts displaying anything.
+void main() async {
+  // Required whenever you call async code (like our notification
+  // setup) before runApp() — Flutter needs this to be ready first.
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Set up the notification system once, at app startup. This is
+  // also when Android will show the "Allow notifications?" popup.
+  await NotificationHelper.instance.init();
+
   runApp(const ClawdBotApp());
 }
 
