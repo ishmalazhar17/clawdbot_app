@@ -1,11 +1,8 @@
 // =====================================================================
-// locations_tab.dart — the Object Locations section of the Memory
-// screen. Add, view, and delete saved locations for objects (e.g.
-// "keys" -> "kitchen drawer").
+// locations_tab.dart — Object Locations section of the Memory screen.
 //
-// Real GPS coordinates come later (Aug 24) — for now this is simple
-// text-based location tracking, which is still genuinely useful on
-// its own.
+// AUG 17 UPDATE: adds a search bar that filters by object or location
+// name.
 // =====================================================================
 
 import 'package:flutter/material.dart';
@@ -19,20 +16,46 @@ class LocationsTab extends StatefulWidget {
 }
 
 class _LocationsTabState extends State<LocationsTab> {
-  List<Map<String, dynamic>> _locations = [];
+  List<Map<String, dynamic>> _allLocations = [];
+  List<Map<String, dynamic>> _filteredLocations = [];
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _refreshLocations();
+    _searchController.addListener(_applyFilter);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _refreshLocations() async {
     final data = await DBHelper.instance.getObjectLocations();
     setState(() {
-      _locations = data;
+      _allLocations = data;
+    });
+    _applyFilter();
+  }
+
+  void _applyFilter() {
+    final query = _searchController.text.trim().toLowerCase();
+    setState(() {
+      if (query.isEmpty) {
+        _filteredLocations = _allLocations;
+      } else {
+        _filteredLocations = _allLocations.where((loc) {
+          final object = loc['object_name'].toString().toLowerCase();
+          final location = (loc['location_name'] ?? '').toString().toLowerCase();
+          return object.contains(query) || location.contains(query);
+        }).toList();
+      }
     });
   }
+
   Future<void> _deleteLocation(int id) async {
     await DBHelper.instance.deleteObjectLocation(id);
     _refreshLocations();
@@ -78,7 +101,7 @@ class _LocationsTabState extends State<LocationsTab> {
                 await DBHelper.instance.insertObjectLocation({
                   'object_name': objectController.text.trim(),
                   'location_name': locationController.text.trim(),
-                  'latitude': null,  // real GPS comes Aug 24
+                  'latitude': null,
                   'longitude': null,
                 });
 
@@ -100,23 +123,46 @@ class _LocationsTabState extends State<LocationsTab> {
         onPressed: _showAddLocationDialog,
         child: const Icon(Icons.add),
       ),
-      body: _locations.isEmpty
-          ? const Center(child: Text('No saved locations yet. Tap + to add one.'))
-          : ListView.builder(
-              itemCount: _locations.length,
-              itemBuilder: (context, index) {
-                final location = _locations[index];
-                return ListTile(
-                  leading: const Icon(Icons.place),
-                  title: Text(location['object_name']),
-                  subtitle: Text(location['location_name'] ?? 'No location set'),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete, color: Colors.red),
-                    onPressed: () => _deleteLocation(location['id']),
-                  ),
-                );
-              },
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search locations...',
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () => _searchController.clear(),
+                      )
+                    : null,
+              ),
             ),
+          ),
+          Expanded(
+            child: _filteredLocations.isEmpty
+                ? const Center(child: Text('No locations found.'))
+                : ListView.builder(
+                    itemCount: _filteredLocations.length,
+                    itemBuilder: (context, index) {
+                      final location = _filteredLocations[index];
+                      return ListTile(
+                        leading: const Icon(Icons.place),
+                        title: Text(location['object_name']),
+                        subtitle: Text(location['location_name'] ?? 'No location set'),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete, color: Colors.red),
+                          onPressed: () => _deleteLocation(location['id']),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }

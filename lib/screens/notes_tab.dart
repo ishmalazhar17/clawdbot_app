@@ -1,6 +1,7 @@
 // =====================================================================
-// notes_tab.dart — the Notes section of the Memory screen.
-// Same pattern as reminders_tab.dart: add, view, delete.
+// notes_tab.dart — Notes section of the Memory screen.
+//
+// AUG 17 UPDATE: adds a search bar that filters by title or content.
 // =====================================================================
 
 import 'package:flutter/material.dart';
@@ -14,18 +15,45 @@ class NotesTab extends StatefulWidget {
 }
 
 class _NotesTabState extends State<NotesTab> {
-  List<Map<String, dynamic>> _notes = [];
+  List<Map<String, dynamic>> _allNotes = [];
+  List<Map<String, dynamic>> _filteredNotes = [];
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _refreshNotes();
+    _searchController.addListener(_applyFilter);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _refreshNotes() async {
     final data = await DBHelper.instance.getNotes();
     setState(() {
-      _notes = data;
+      _allNotes = data;
+    });
+    _applyFilter();
+  }
+
+  // Filters by title OR content — matches if the search text appears
+  // in either field.
+  void _applyFilter() {
+    final query = _searchController.text.trim().toLowerCase();
+    setState(() {
+      if (query.isEmpty) {
+        _filteredNotes = _allNotes;
+      } else {
+        _filteredNotes = _allNotes.where((n) {
+          final title = n['title'].toString().toLowerCase();
+          final content = (n['content'] ?? '').toString().toLowerCase();
+          return title.contains(query) || content.contains(query);
+        }).toList();
+      }
     });
   }
 
@@ -53,7 +81,7 @@ class _NotesTabState extends State<NotesTab> {
               TextField(
                 controller: contentController,
                 decoration: const InputDecoration(labelText: 'Content'),
-                maxLines: 3, // lets this field grow to 3 lines tall
+                maxLines: 3,
               ),
             ],
           ),
@@ -90,23 +118,46 @@ class _NotesTabState extends State<NotesTab> {
         onPressed: _showAddNoteDialog,
         child: const Icon(Icons.add),
       ),
-      body: _notes.isEmpty
-          ? const Center(child: Text('No notes yet. Tap + to add one.'))
-          : ListView.builder(
-              itemCount: _notes.length,
-              itemBuilder: (context, index) {
-                final note = _notes[index];
-                return ListTile(
-                  leading: const Icon(Icons.note),
-                  title: Text(note['title']),
-                  subtitle: Text(note['content'] ?? ''),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete, color: Colors.red),
-                    onPressed: () => _deleteNote(note['id']),
-                  ),
-                );
-              },
+            body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search notes...',
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () => _searchController.clear(),
+                      )
+                    : null,
+              ),
             ),
+          ),
+          Expanded(
+            child: _filteredNotes.isEmpty
+                ? const Center(child: Text('No notes found.'))
+                : ListView.builder(
+                    itemCount: _filteredNotes.length,
+                    itemBuilder: (context, index) {
+                      final note = _filteredNotes[index];
+                      return ListTile(
+                        leading: const Icon(Icons.note),
+                        title: Text(note['title']),
+                        subtitle: Text(note['content'] ?? ''),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete, color: Colors.red),
+                          onPressed: () => _deleteNote(note['id']),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }
