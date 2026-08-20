@@ -1,19 +1,18 @@
 // =====================================================================
 // chatbot_screen.dart — where the user talks to Clawd Bot, by typing.
 //
-// UPDATED Aug 19: real chat bubbles + wired up to Person A's live
-// /chat endpoint. Voice input/output comes later (Aug 21).
+// UPDATED Aug 20: this is the highest-risk integration point in the
+// whole project. The backend's /chat reply includes an "action" (e.g.
+// "create this reminder with this data"), and TODAY this screen
+// actually EXECUTES that action - writing it into the phone's local
+// database via DBHelper - instead of just displaying it as text.
 // =====================================================================
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../db_helper.dart';
 
-// -----------------------------------------------------------------
-// IMPORTANT: this is your backend's current public URL from ngrok.
-// If Person A restarts ngrok and gets a NEW url in the future,
-// you'll need to update this line to match.
-// -----------------------------------------------------------------
 const String kBackendBaseUrl = 'https://recede-nerd-sip.ngrok-free.dev';
 
 
@@ -59,6 +58,7 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+
         setState(() {
           _messages.add(ChatMessage(
             text: data['reply'] ?? 'Sorry, I didn\'t understand that.',
@@ -66,6 +66,8 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
             action: data['action'],
           ));
         });
+
+        await _executeAction(data['action']);
       } else {
         setState(() {
           _messages.add(ChatMessage(
@@ -87,6 +89,110 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
       });
       _scrollToBottom();
     }
+  }
+
+  Future<void> _executeAction(Map<String, dynamic>? action) async {
+    if (action == null) return;
+
+    final String actionType = action['action'] ?? 'none';
+    final Map<String, dynamic> data =
+        (action['data'] as Map<String, dynamic>?) ?? {};
+
+    switch (actionType) {
+      case 'create_reminder':
+        await DBHelper.instance.insertReminder({
+          'task': data['task'] ?? '',
+          'date': data['date'] ?? '',
+          'time': data['time'] ?? '',
+          'priority': data['priority'] ?? 'green',
+          'completed': 0,
+        });
+        await DBHelper.instance.logContext('reminder_created');
+
+        setState(() {
+          _messages.add(ChatMessage(
+            text: '✅ Saved to your reminders.',
+            isUser: false,
+          ));
+        });
+        break;
+
+      case 'find_object':
+        final String query = (data['query'] ?? '').toString().toLowerCase();
+        final locations = await DBHelper.instance.getObjectLocations();
+
+        Map<String, dynamic> match = <String, dynamic>{};
+        for (final loc in locations) {
+          final name = (loc['object_name'] as String).toLowerCase();
+          if (name.contains(query)) {
+            match = loc;
+            break;
+          }
+        }
+
+        final String replyText = match.isNotEmpty
+            ? "I found it — you saved '${match['object_name']}' at ${match['location_name'] ?? 'an unknown spot'}."
+            : "I couldn't find anything saved for '$query'. You can add it on the Memory screen.";
+
+        setState(() {
+          _messages.add(ChatMessage(text: replyText, isUser: false));
+        });
+        break;
+
+      case 'find_note':
+        final String query = (data['query'] ?? '').toString().toLowerCase();
+        final notes = await DBHelper.instance.getNotes();
+
+        final matches = notes.where((n) {
+          final title = (n['title'] as String? ?? '').toLowerCase();
+          final content = (n['content'] as String? ?? '').toLowerCase();
+          return title.contains(query) || content.contains(query);
+        }).toList();
+
+        final String replyText = matches.isNotEmpty
+            ? "Found ${matches.length} note(s): ${matches.map((n) => n['title']).join(', ')}"
+            : "I couldn't find any notes about '$query'.";
+
+        setState(() {
+          _messages.add(ChatMessage(text: replyText, isUser: false));
+        });
+        break;
+
+      // ---- List TODAY'S reminders from the local database ----
+      // UPDATED Aug 20: was showing ALL reminders regardless of date,
+      // which is confusing when the user specifically asks "what do
+      // I have TODAY" - now filters to just today's date.
+      case 'list_tasks':
+        final allReminders = await DBHelper.instance.getReminders();
+
+        final now = DateTime.now();
+        final todayStr =
+            '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+        final todaysReminders =
+            allReminders.where((r) => r['date'] == todayStr).toList();
+
+        String replyText;
+        if (todaysReminders.isEmpty) {
+          replyText = "You don't have anything scheduled for today.";
+        } else {
+          final list = todaysReminders
+              .take(5)
+              .map((r) => "• ${r['task']} (${r['time']})")
+              .join('\n');
+          replyText = "Here's what you have today:\n$list";
+        }
+
+        setState(() {
+          _messages.add(ChatMessage(text: replyText, isUser: false));
+        });
+        break;
+
+      default:
+        break;
+    }
+
+    _scrollToBottom();
   }
 
   void _scrollToBottom() {
