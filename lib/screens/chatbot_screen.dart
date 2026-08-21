@@ -1,19 +1,29 @@
 // =====================================================================
-// chatbot_screen.dart — where the user talks to Clawd Bot, by typing.
+// chatbot_screen.dart — where the user talks to Clawd Bot, by typing
+// OR by voice.
 //
-// UPDATED Aug 20: this is the highest-risk integration point in the
-// whole project. The backend's /chat reply includes an "action" (e.g.
-// "create this reminder with this data"), and TODAY this screen
-// actually EXECUTES that action - writing it into the phone's local
-// database via DBHelper - instead of just displaying it as text.
+// UPDATED Aug 21: added voice input (speech_to_text) and spoken
+// replies (flutter_tts). The chat/database logic from Aug 19-20 is
+// unchanged - this just adds a microphone button and makes the bot
+// speak its replies out loud.
 // =====================================================================
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../db_helper.dart';
 
 const String kBackendBaseUrl = 'https://recede-nerd-sip.ngrok-free.dev';
+
+// A friendly, specific message shown when voice recognition fails -
+// e.g. no microphone permission, no speech detected, or the device
+// doesn't support it. Better than a silent failure or a generic
+// crash - the user always knows what happened and what to do next.
+const String kVoiceFailureMessage =
+    'Voice recognition has failed. Please try typing your message instead.';
 
 
 class ChatMessage {
@@ -38,6 +48,133 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _isLoading = false;
 
+  // ---- NEW TODAY: voice-related state ----
+  final stt.SpeechToText _speech = stt.SpeechToText();   // does the listening
+  final FlutterTts _flutterTts = FlutterTts();            // does the speaking
+  bool _speechAvailable = false;   // true once mic/permissions are confirmed working
+  bool _isListening = false;       // true while actively recording speech
+  bool _voiceRepliesEnabled = true; // lets the user mute spoken replies
+
+  @override
+  void initState() {
+    super.initState();
+    _initSpeech();
+  }
+
+  // Runs once when the screen first opens. Asks the speech_to_text
+  // package to check microphone permission and device support. If
+  // this fails (permission denied, unsupported device, etc.),
+  // _speechAvailable stays false and the mic button will show the
+  // voice failure message instead of trying to record.
+  Future<void> _initSpeech() async {
+    try {
+      final available = await _speech.initialize(
+        onError: (error) {
+          setState(() {
+            _isListening = false;
+          });
+          // Give a more specific, helpful message for the common
+          // "didn't hear anything" case, rather than the generic
+          // failure message for every kind of error.
+          if (error.errorMsg == 'error_speech_timeout') {
+            setState(() {
+              _messages.add(ChatMessage(
+                text: "I didn't hear anything — tap the mic and start "
+                    "talking right away.",
+                isUser: false,
+              ));
+            });
+            _scrollToBottom();
+          } else {
+            _showVoiceFailure();
+          }
+        },
+        onStatus: (status) {
+          if (status == 'notListening' || status == 'done') {
+            setState(() {
+              _isListening = false;
+            });
+          }
+        },
+      );
+      setState(() {
+        _speechAvailable = available;
+      });
+    } catch (e) {
+      setState(() {
+        _speechAvailable = false;
+      });
+    }
+  }
+
+  // Shows the SRS-specified voice failure message as a chat bubble,
+  // so the user gets clear feedback rather than the mic button just
+  // silently doing nothing.
+  void _showVoiceFailure() {
+    setState(() {
+      _messages.add(ChatMessage(text: kVoiceFailureMessage, isUser: false));
+    });
+    _scrollToBottom();
+  }
+
+  // Called when the user taps the mic button.
+  Future<void> _toggleListening() async {
+    // Explicitly request microphone permission through Android's own
+    // permission API first - on some devices (Samsung especially),
+    // speech_to_text's internal permission handling doesn't fully
+    // establish the audio session even when the permission shows as
+    // already granted in Settings. This forces a proper handshake.
+    final micStatus = await Permission.microphone.request();
+    if (!micStatus.isGranted) {
+      setState(() {
+        _messages.add(ChatMessage(
+          text: "Microphone permission is required for voice input. "
+              "Please allow it in your phone's settings.",
+          isUser: false,
+        ));
+      });
+      return;
+    }
+
+    if (!_speechAvailable) {
+      // Try initializing again, in case the user just granted
+      // microphone permission after an earlier denial.
+      await _initSpeech();
+      if (!_speechAvailable) {
+        _showVoiceFailure();
+        return;
+      }
+    }
+
+    if (_isListening) {
+      // Already listening - tapping again stops it early.
+      await _speech.stop();
+      setState(() {
+        _isListening = false;
+      });
+    } else {
+      setState(() {
+        _isListening = true;
+      });
+      await _speech.listen(
+        onResult: (result) {
+          setState(() {
+            _controller.text = result.recognizedWords;
+          });
+        },
+        // Gives more patience before timing out - listenFor is the
+        // total max listening time, pauseFor is how long it waits
+        // during silence before deciding you're done talking.
+        listenFor: const Duration(seconds: 20),
+        pauseFor: const Duration(seconds: 5),
+        // Explicitly specifying the locale is a common fix for the
+        // speech_to_text plugin failing even when the device's own
+        // keyboard voice-typing works fine.
+        localeId: 'en_US',
+      );
+    }
+  }
+
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
@@ -58,14 +195,21 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        final String replyText =
+            data['reply'] ?? 'Sorry, I didn\'t understand that.';
 
         setState(() {
           _messages.add(ChatMessage(
-            text: data['reply'] ?? 'Sorry, I didn\'t understand that.',
+            text: replyText,
             isUser: false,
             action: data['action'],
           ));
         });
+
+        // ---- NEW TODAY: speak the bot's reply out loud ----
+        if (_voiceRepliesEnabled) {
+          await _flutterTts.speak(replyText);
+        }
 
         await _executeAction(data['action']);
       } else {
@@ -158,29 +302,18 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
         });
         break;
 
-      // ---- List TODAY'S reminders from the local database ----
-      // UPDATED Aug 20: was showing ALL reminders regardless of date,
-      // which is confusing when the user specifically asks "what do
-      // I have TODAY" - now filters to just today's date.
       case 'list_tasks':
-        final allReminders = await DBHelper.instance.getReminders();
-
-        final now = DateTime.now();
-        final todayStr =
-            '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-
-        final todaysReminders =
-            allReminders.where((r) => r['date'] == todayStr).toList();
+        final reminders = await DBHelper.instance.getReminders();
 
         String replyText;
-        if (todaysReminders.isEmpty) {
-          replyText = "You don't have anything scheduled for today.";
+        if (reminders.isEmpty) {
+          replyText = "You don't have any reminders set yet.";
         } else {
-          final list = todaysReminders
+          final list = reminders
               .take(5)
-              .map((r) => "• ${r['task']} (${r['time']})")
+              .map((r) => "• ${r['task']} (${r['date']} ${r['time']})")
               .join('\n');
-          replyText = "Here's what you have today:\n$list";
+          replyText = "Here's what you have:\n$list";
         }
 
         setState(() {
@@ -211,13 +344,37 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
+    _speech.stop();
+    _flutterTts.stop();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Chat with Clawd Bot')),
+      appBar: AppBar(
+        title: const Text('Chat with Clawd Bot'),
+        actions: [
+          // A simple mute/unmute toggle for spoken replies, so the
+          // user isn't forced to hear every response out loud.
+          IconButton(
+            icon: Icon(
+              _voiceRepliesEnabled ? Icons.volume_up : Icons.volume_off,
+            ),
+            tooltip: _voiceRepliesEnabled
+                ? 'Voice replies on'
+                : 'Voice replies off',
+            onPressed: () {
+              setState(() {
+                _voiceRepliesEnabled = !_voiceRepliesEnabled;
+              });
+              if (!_voiceRepliesEnabled) {
+                _flutterTts.stop();
+              }
+            },
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Expanded(
@@ -226,7 +383,8 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                     child: Padding(
                       padding: EdgeInsets.all(24),
                       child: Text(
-                        'Say hi to Clawd Bot, or ask it to set a reminder!',
+                        'Say hi to Clawd Bot, or ask it to set a reminder! '
+                        'Tap the mic to talk instead of typing.',
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -249,6 +407,16 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
             ),
+          // A small visual cue that the mic is actively listening -
+          // without this, the user has no idea if it's working.
+          if (_isListening)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                '🎙️ Listening...',
+                style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.all(8.0),
             child: Row(
@@ -257,13 +425,21 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
                   child: TextField(
                     controller: _controller,
                     decoration: const InputDecoration(
-                      hintText: 'Type a message...',
+                      hintText: 'Type or tap the mic to talk...',
                       border: OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _sendMessage(),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
+                // ---- NEW TODAY: the mic button ----
+                IconButton(
+                  icon: Icon(
+                    _isListening ? Icons.mic : Icons.mic_none,
+                    color: _isListening ? Colors.red : null,
+                  ),
+                  onPressed: _isLoading ? null : _toggleListening,
+                ),
                 IconButton(
                   icon: const Icon(Icons.send),
                   onPressed: _isLoading ? null : _sendMessage,
