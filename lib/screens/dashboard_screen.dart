@@ -2,12 +2,13 @@
 // dashboard_screen.dart — the "home" tab. Shows today's reminders,
 // upcoming reminders, and recent notes at a glance.
 //
-// AUG 16 UPDATE: replaces the simple full-list view with organized
-// sections, filtered and sorted by date.
+// UPDATED Aug 24: added a gear icon in the AppBar that opens the new
+// Settings screen.
 // =====================================================================
 
 import 'package:flutter/material.dart';
 import '../db_helper.dart';
+import 'settings_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -28,22 +29,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _loadDashboardData();
   }
 
-  // Fetches reminders and notes, then sorts them into the sections
-  // this screen displays.
   Future<void> _loadDashboardData() async {
     final allReminders = await DBHelper.instance.getReminders();
     final allNotes = await DBHelper.instance.getNotes();
 
-    // Today's date as a string in the same YYYY-MM-DD format the
-    // reminders use, so we can compare them directly as text.
     final today = DateTime.now();
     final todayString =
         '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
 
-    // Split reminders into "today" (date matches exactly) and
-    // "upcoming" (date is any string that sorts after today's date —
-    // simple text comparison works here since YYYY-MM-DD format sorts
-    // correctly as plain text).
     final todayList = allReminders
         .where((r) => r['date'] == todayString)
         .toList();
@@ -52,20 +45,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
         .where((r) => r['date'] != null && r['date'].toString().compareTo(todayString) > 0)
         .toList();
 
-    // Sort upcoming reminders so the soonest date shows first.
     upcomingList.sort((a, b) => a['date'].toString().compareTo(b['date'].toString()));
 
     setState(() {
       _todayReminders = todayList;
       _upcomingReminders = upcomingList;
-      // Only show the 3 most recent notes (they're already sorted
-      // newest-first by db_helper.dart's "ORDER BY id DESC").
       _recentNotes = allNotes.take(3).toList();
       _loading = false;
     });
   }
 
-  // A small reusable header widget used above each section.
   Widget _sectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
@@ -79,11 +68,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Dashboard')),
+      appBar: AppBar(
+        title: const Text('Dashboard'),
+        actions: [
+          // ---- NEW TODAY: gear icon that opens Settings ----
+          // Navigator.push adds a new screen ON TOP of the current
+          // one (with a back arrow to return), unlike the bottom nav
+          // tabs which SWAP the current screen entirely. This is the
+          // right choice for a screen you visit occasionally, like
+          // Settings, rather than one of your core daily tabs.
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          // RefreshIndicator adds "pull down to refresh" behavior —
-          // standard on most mobile apps.
           : RefreshIndicator(
               onRefresh: _loadDashboardData,
               child: ListView(
@@ -127,12 +133,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           subtitle: Text(
                             n['content'] ?? '',
                             maxLines: 1,
-                            overflow: TextOverflow.ellipsis, // adds "..." if text is too long
+                            overflow: TextOverflow.ellipsis,
                           ),
                         )),
 
-                  // A bit of empty space at the bottom so the last
-                  // item isn't crowded against the screen edge.
                   const SizedBox(height: 24),
                 ],
               ),

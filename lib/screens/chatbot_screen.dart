@@ -14,7 +14,9 @@ import 'package:http/http.dart' as http;
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../db_helper.dart';
+import 'settings_screen.dart';
 
 const String kBackendBaseUrl = 'https://recede-nerd-sip.ngrok-free.dev';
 
@@ -59,6 +61,21 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
   void initState() {
     super.initState();
     _initSpeech();
+    _loadVoiceSetting();
+  }
+
+  // ---- NEW TODAY: read the persisted setting from Settings screen ----
+  // Without this, muting voice replies would only last until the app
+  // is closed - every fresh launch would silently reset back to "on"
+  // regardless of what the user chose in Settings. Reading the same
+  // shared_preferences key that settings_screen.dart writes to keeps
+  // both screens showing a consistent value.
+  Future<void> _loadVoiceSetting() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _voiceRepliesEnabled =
+          prefs.getBool(SettingsKeys.voiceRepliesEnabled) ?? true;
+    });
   }
 
   // Runs once when the screen first opens. Asks the speech_to_text
@@ -364,13 +381,18 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
             tooltip: _voiceRepliesEnabled
                 ? 'Voice replies on'
                 : 'Voice replies off',
-            onPressed: () {
+            onPressed: () async {
+              final newValue = !_voiceRepliesEnabled;
               setState(() {
-                _voiceRepliesEnabled = !_voiceRepliesEnabled;
+                _voiceRepliesEnabled = newValue;
               });
-              if (!_voiceRepliesEnabled) {
+              if (!newValue) {
                 _flutterTts.stop();
               }
+              // Save it so the Settings screen (and this screen, on
+              // next app launch) sees the same value.
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool(SettingsKeys.voiceRepliesEnabled, newValue);
             },
           ),
         ],
