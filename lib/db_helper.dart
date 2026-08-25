@@ -128,6 +128,20 @@ class DBHelper {
     return await db.delete('reminders', where: 'id = ?', whereArgs: [id]);
   }
 
+  // ---- NEW (Aug 28): updates an EXISTING reminder's fields ----
+  // Different from updateReminderStatus (which only ever touches the
+  // 'completed' flag) - this lets any combination of fields (task,
+  // date, time, priority, category) be changed, for real editing.
+  Future<int> updateReminder(int id, Map<String, dynamic> updatedFields) async {
+    final db = await database;
+    return await db.update(
+      'reminders',
+      updatedFields,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   // ===================================================================
   // NOTE functions
   // ===================================================================

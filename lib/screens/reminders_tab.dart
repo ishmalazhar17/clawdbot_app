@@ -73,6 +73,145 @@ class _RemindersTabState extends State<RemindersTab> {
     _refreshReminders();
   }
 
+  // ---- NEW (Aug 28): edit an EXISTING reminder ----
+  // Reuses the same form layout as "Add", but pre-fills every field
+  // with the reminder's current values, and on Save UPDATES the
+  // existing row instead of inserting a new one. Also correctly
+  // handles the notification: the OLD scheduled notification (at the
+  // old time) is cancelled first, then a new one is scheduled at
+  // whatever time the user just set - otherwise editing the time
+  // would leave a stale notification firing at the wrong moment.
+  void _showEditReminderDialog(Map<String, dynamic> reminder) async {
+    final availableCategories = await _loadCategories();
+    if (!mounted) return;
+
+    final taskController = TextEditingController(text: reminder['task']);
+    final dateController = TextEditingController(text: reminder['date']);
+    final timeController = TextEditingController(text: reminder['time']);
+    String selectedPriority = reminder['priority'] ?? 'green';
+    String? selectedCategory = reminder['category'];
+    final int reminderId = reminder['id'];
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Edit Reminder'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: taskController,
+                      decoration: const InputDecoration(labelText: 'Task'),
+                    ),
+                    TextField(
+                      controller: dateController,
+                      decoration: const InputDecoration(
+                        labelText: 'Date (YYYY-MM-DD)',
+                      ),
+                    ),
+                    TextField(
+                      controller: timeController,
+                      decoration: const InputDecoration(
+                        labelText: 'Time (HH:MM)',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _priorityChip('green', 'Low', selectedPriority, (value) {
+                          setDialogState(() => selectedPriority = value);
+                        }),
+                        _priorityChip('yellow', 'Medium', selectedPriority, (value) {
+                          setDialogState(() => selectedPriority = value);
+                        }),
+                        _priorityChip('red', 'High', selectedPriority, (value) {
+                          setDialogState(() => selectedPriority = value);
+                        }),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    if (availableCategories.isNotEmpty)
+                      DropdownButtonFormField<String>(
+                        value: availableCategories.contains(selectedCategory)
+                            ? selectedCategory
+                            : null,
+                        decoration: const InputDecoration(labelText: 'Category (optional)'),
+                        items: availableCategories
+                            .map((cat) => DropdownMenuItem(
+                                  value: cat,
+                                  child: Text(cat),
+                                ))
+                            .toList(),
+                        onChanged: (value) {
+                          setDialogState(() => selectedCategory = value);
+                        },
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    if (taskController.text.trim().isEmpty) return;
+
+                    await DBHelper.instance.updateReminder(reminderId, {
+                      'task': taskController.text.trim(),
+                      'date': dateController.text.trim(),
+                      'time': timeController.text.trim(),
+                      'priority': selectedPriority,
+                      'category': selectedCategory,
+                    });
+
+                    // Cancel the OLD notification before scheduling
+                    // the new one - critical, otherwise a stale
+                    // notification at the old time would still fire.
+                    await NotificationHelper.instance.cancelNotification(reminderId);
+
+                    try {
+                      final dateParts = dateController.text.trim().split('-');
+                      final timeParts = timeController.text.trim().split(':');
+
+                      final scheduledDate = DateTime(
+                        int.parse(dateParts[0]),
+                        int.parse(dateParts[1]),
+                        int.parse(dateParts[2]),
+                        int.parse(timeParts[0]),
+                        int.parse(timeParts[1]),
+                      );
+
+                      await NotificationHelper.instance.scheduleNotification(
+                        id: reminderId,
+                        title: 'Clawd Bot Reminder',
+                        body: taskController.text.trim(),
+                        scheduledDate: scheduledDate,
+                      );
+                    } catch (e) {
+                      // ignore: avoid_print
+                      print('Notification re-scheduling failed: $e');
+                    }
+
+                    Navigator.pop(context);
+                    _refreshReminders();
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Color _priorityColor(String priority) {
     switch (priority) {
       case 'red':
@@ -338,6 +477,11 @@ class _RemindersTabState extends State<RemindersTab> {
                               ? '${reminder['date']} at ${reminder['time']} • $category'
                               : '${reminder['date']} at ${reminder['time']}',
                         ),
+                        // NEW (Aug 28): tapping the tile itself
+                        // (anywhere except the checkbox/delete icon,
+                        // which have their own separate tap targets)
+                        // opens the edit dialog.
+                        onTap: () => _showEditReminderDialog(reminder),
                         trailing: IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),
                           onPressed: () => _deleteReminder(reminder['id']),
