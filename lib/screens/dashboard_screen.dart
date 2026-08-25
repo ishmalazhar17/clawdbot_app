@@ -37,12 +37,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final todayString =
         '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
 
+    // UPDATED Aug 27: excludes completed reminders from both
+    // sections - once you've checked something off, it shouldn't
+    // keep cluttering your daily overview.
     final todayList = allReminders
-        .where((r) => r['date'] == todayString)
+        .where((r) => r['date'] == todayString && r['completed'] != 1)
         .toList();
 
     final upcomingList = allReminders
-        .where((r) => r['date'] != null && r['date'].toString().compareTo(todayString) > 0)
+        .where((r) =>
+            r['date'] != null &&
+            r['date'].toString().compareTo(todayString) > 0 &&
+            r['completed'] != 1)
         .toList();
 
     upcomingList.sort((a, b) => a['date'].toString().compareTo(b['date'].toString()));

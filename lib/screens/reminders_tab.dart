@@ -65,6 +65,14 @@ class _RemindersTabState extends State<RemindersTab> {
     _refreshReminders();
   }
 
+  // ---- NEW TODAY: marks a reminder done/not-done ----
+  // updateReminderStatus already existed in db_helper.dart from Day 1
+  // - it just had no UI hooked up to it until now.
+  Future<void> _toggleCompleted(int id, bool isCurrentlyCompleted) async {
+    await DBHelper.instance.updateReminderStatus(id, isCurrentlyCompleted ? 0 : 1);
+    _refreshReminders();
+  }
+
   Color _priorityColor(String priority) {
     switch (priority) {
       case 'red':
@@ -291,12 +299,40 @@ class _RemindersTabState extends State<RemindersTab> {
                       final category = reminder['category'];
                       final hasCategory = category != null && category.toString().isNotEmpty;
 
+                      final isCompleted = reminder['completed'] == 1;
+
                       return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: _priorityColor(reminder['priority'] ?? 'green'),
-                          radius: 8,
+                        // The checkbox is now the primary leading
+                        // element (the standard to-do-app pattern);
+                        // priority still shows as a small colored dot
+                        // next to it so neither indicator is lost.
+                        leading: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Checkbox(
+                              value: isCompleted,
+                              onChanged: (_) =>
+                                  _toggleCompleted(reminder['id'], isCompleted),
+                            ),
+                            CircleAvatar(
+                              backgroundColor: _priorityColor(reminder['priority'] ?? 'green'),
+                              radius: 6,
+                            ),
+                          ],
                         ),
-                        title: Text(reminder['task']),
+                        title: Text(
+                          reminder['task'],
+                          // Strikethrough + greyed out text is the
+                          // universal "done" visual convention - it
+                          // stays in the list (not hidden) so the
+                          // user can still un-check it if needed.
+                          style: isCompleted
+                              ? TextStyle(
+                                  decoration: TextDecoration.lineThrough,
+                                  color: Colors.grey[500],
+                                )
+                              : null,
+                        ),
                         subtitle: Text(
                           hasCategory
                               ? '${reminder['date']} at ${reminder['time']} • $category'
