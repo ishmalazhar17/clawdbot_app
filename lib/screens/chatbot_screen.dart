@@ -11,6 +11,9 @@
 // its Authorization header instead of a hardcoded 'user_id': 'default'
 // — Person A's backend now identifies the user from the token, via
 // their Sep 19 auth middleware.
+//
+// UPDATED Sep 22: added a Logout button to the AppBar. Clears the
+// saved token and returns to the Login screen.
 // =====================================================================
 
 import 'dart:convert';
@@ -23,6 +26,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../db_helper.dart';
 import '../auth_service.dart';
 import 'settings_screen.dart';
+import 'login_screen.dart';
 
 const String kBackendBaseUrl = 'https://recede-nerd-sip.ngrok-free.dev';
 
@@ -384,6 +388,40 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     });
   }
 
+  // NEW Sep 22: shows a confirm dialog, then logs the user out and
+  // sends them back to the Login screen with the entire navigation
+  // history cleared (so "back" can't return to the logged-in app).
+  Future<void> _handleLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text('You will need to log in again to use Clawd Bot.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    await AuthService.instance.logout();
+
+    if (!mounted) return;
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => const LoginScreen()),
+      (route) => false,
+    );
+  }
+
   @override
   void dispose() {
     _controller.dispose();
@@ -421,6 +459,12 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
               final prefs = await SharedPreferences.getInstance();
               await prefs.setBool(SettingsKeys.voiceRepliesEnabled, newValue);
             },
+          ),
+          // NEW Sep 22: Logout button.
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Log out',
+            onPressed: _handleLogout,
           ),
         ],
       ),
