@@ -1,11 +1,16 @@
 // =====================================================================
 // signup_screen.dart — the Signup screen UI.
 //
-// Same idea as login_screen.dart: layout only today. Sep 19–20 will
-// wire this to Person A's /auth/signup endpoint.
+// UPDATED Sep 20: calls AuthService.signup(). On success, we
+// automatically log the new user in right after (same credentials)
+// so they land straight in the app instead of being bounced back to
+// a Login screen they'd have to fill in again — one less step for
+// someone with memory difficulties, which fits this app's whole
+// purpose.
 // =====================================================================
 
 import 'package:flutter/material.dart';
+import '../auth_service.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -21,12 +26,19 @@ class _SignupScreenState extends State<SignupScreen> {
       TextEditingController();
 
   bool _obscurePassword = true;
+  bool _isLoading = false;
 
-  // Placeholder — replaced with a real /auth/signup call later.
-  void _handleSignupPressed() {
-    final email = _emailController.text;
+  Future<void> _handleSignupPressed() async {
+    final email = _emailController.text.trim();
     final password = _passwordController.text;
     final confirm = _confirmPasswordController.text;
+
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter both email and password')),
+      );
+      return;
+    }
 
     if (password != confirm) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -35,9 +47,47 @@ class _SignupScreenState extends State<SignupScreen> {
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Signup pressed — email: $email')),
-    );
+    setState(() {
+      _isLoading = true;
+    });
+
+    final signupResult = await AuthService.instance.signup(email, password);
+
+    if (!mounted) return;
+
+    if (signupResult['success'] != true) {
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(signupResult['error'] ?? 'Signup failed')),
+      );
+      return;
+    }
+
+    // Signup worked — now log in automatically with the same
+    // credentials so the user doesn't have to type them again.
+    final loginResult = await AuthService.instance.login(email, password);
+
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = false;
+    });
+
+    if (loginResult['success'] == true) {
+      Navigator.of(context).pushReplacementNamed('/home');
+    } else {
+      // Rare edge case: account was created but auto-login failed
+      // (e.g. a network blip right after signup). Send them to the
+      // Login screen to try manually rather than leaving them stuck.
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Account created — please log in.'),
+        ),
+      );
+      Navigator.of(context).pop();
+    }
   }
 
   @override
@@ -68,10 +118,10 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                   const SizedBox(height: 32),
 
-                  // ---- Email field ----
                   TextField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
+                    enabled: !_isLoading,
                     decoration: const InputDecoration(
                       labelText: 'Email',
                       prefixIcon: Icon(Icons.email_outlined),
@@ -80,10 +130,10 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // ---- Password field ----
                   TextField(
                     controller: _passwordController,
                     obscureText: _obscurePassword,
+                    enabled: !_isLoading,
                     decoration: InputDecoration(
                       labelText: 'Password',
                       prefixIcon: const Icon(Icons.lock_outline),
@@ -104,10 +154,10 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // ---- Confirm password field ----
                   TextField(
                     controller: _confirmPasswordController,
                     obscureText: _obscurePassword,
+                    enabled: !_isLoading,
                     decoration: const InputDecoration(
                       labelText: 'Confirm Password',
                       prefixIcon: Icon(Icons.lock_outline),
@@ -116,20 +166,30 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // ---- Signup button ----
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
-                    onPressed: _handleSignupPressed,
-                    child: const Text('Sign Up', style: TextStyle(fontSize: 16)),
+                    onPressed: _isLoading ? null : _handleSignupPressed,
+                    child: _isLoading
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Sign Up', style: TextStyle(fontSize: 16)),
                   ),
                   const SizedBox(height: 16),
 
                   TextButton(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                    },
+                    onPressed: _isLoading
+                        ? null
+                        : () {
+                            Navigator.of(context).pop();
+                          },
                     child: const Text('Already have an account? Log in'),
                   ),
                 ],

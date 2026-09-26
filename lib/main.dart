@@ -15,7 +15,7 @@ import 'screens/suggestions_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'notification_helper.dart';
-
+import 'auth_gate.dart';
 // This is the very first function that runs in the whole app.
 // runApp() takes a widget and makes it fill the screen.
 //
@@ -53,7 +53,7 @@ class ClawdBotApp extends StatelessWidget {
         '/signup': (context) => const SignupScreen(),
         '/home': (context) => const HomeNavigation(),
       },
-      home: const LoginScreen(),
+            home: const AuthGate(),
     );
   }
 }
