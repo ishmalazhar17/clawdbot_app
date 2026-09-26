@@ -12,6 +12,8 @@ import 'screens/dashboard_screen.dart';
 import 'screens/chatbot_screen.dart';
 import 'screens/memory_screen.dart';
 import 'screens/suggestions_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/signup_screen.dart';
 
 // This is the very first function that runs in the whole app.
 // runApp() takes a widget and makes it fill the screen.
@@ -20,7 +22,9 @@ void main() {
 }
 
 // The root widget of the app. Sets up app-wide things like the theme
-// and title, then hands off to HomeNavigation for the actual content.
+// and title, then hands off to LoginScreen first (Sep 17 wireframe
+// stage). Once Sep 20's "check for stored token" logic is added,
+// this will route to HomeNavigation automatically for logged-in users.
 class ClawdBotApp extends StatelessWidget {
   const ClawdBotApp({super.key});
 
@@ -33,7 +37,11 @@ class ClawdBotApp extends StatelessWidget {
         primarySwatch: Colors.indigo,
         useMaterial3: true,
       ),
-      home: const HomeNavigation(),
+      routes: {
+        '/signup': (context) => const SignupScreen(),
+        '/home': (context) => const HomeNavigation(),
+      },
+      home: const LoginScreen(),
     );
   }
 }
