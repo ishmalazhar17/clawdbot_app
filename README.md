@@ -15,3 +15,6 @@ A few resources to get you started if this is your first Flutter project:
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
+
+
+ ## Notes - Voice input/output (speech-to-text, text-to-speech) is confirmed working on a real Android device. Speech recognition is unreliable on Android emulators due to microphone passthrough limitations - always test voice features on real hardware.
