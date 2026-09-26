@@ -1,13 +1,15 @@
 // =====================================================================
 // login_screen.dart — the Login screen UI.
 //
-// TODAY (Sep 17) this is just the LAYOUT — text fields and a button.
-// It doesn't talk to the backend yet. That wiring happens on Sep 19
-// per the Phase 2 schedule, once Person A's /auth/login endpoint and
-// flutter_secure_storage are both ready.
+// UPDATED Sep 19: now actually calls AuthService.login(), which hits
+// the backend's /auth/login endpoint and saves the returned token
+// using flutter_secure_storage. On success, navigates to the main
+// app (HomeNavigation). On failure, shows the real error message
+// from the backend instead of the old placeholder snackbar.
 // =====================================================================
 
 import 'package:flutter/material.dart';
+import '../auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -17,29 +19,60 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  // Controllers let us READ whatever the user types into these boxes.
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
-  // Hides/shows the password as dots vs plain text.
   bool _obscurePassword = true;
 
-  // Placeholder for now — Sep 19 will replace this with a real call
-  // to Person A's /auth/login endpoint.
-  void _handleLoginPressed() {
-    final email = _emailController.text;
+  // NEW: tracks whether a login request is currently in progress, so
+  // we can show a spinner and disable the button (stops the user from
+  // tapping Login multiple times while waiting for the server).
+  bool _isLoading = false;
+
+  Future<void> _handleLoginPressed() async {
+    final email = _emailController.text.trim();
     final password = _passwordController.text;
-    // TEMPORARY: just shows what was typed, so we can confirm the
-    // screen works before any backend wiring exists.
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Login pressed — email: $email')),
-    );
+
+    // Basic validation BEFORE calling the backend — no point making a
+    // network request for obviously-empty fields.
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter both email and password')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    final result = await AuthService.instance.login(email, password);
+
+    // IMPORTANT: after an "await", always check "mounted" before
+    // touching context/setState. If the user navigated away or the
+    // widget was disposed while we were waiting on the network call,
+    // this screen might not exist anymore — using its context would
+    // crash the app.
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = false;
+    });
+
+    if (result['success'] == true) {
+      // Login worked — go to the main app. pushReplacementNamed (not
+      // pushNamed) so the user can't tap "back" and land on the
+      // Login screen again after logging in.
+      Navigator.of(context).pushReplacementNamed('/home');
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result['error'] ?? 'Login failed')),
+      );
+    }
   }
 
   @override
   void dispose() {
-    // Always clean up controllers when the screen is closed, to avoid
-    // memory leaks.
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -72,10 +105,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 32),
 
-                  // ---- Email field ----
                   TextField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
+                    enabled: !_isLoading,
                     decoration: const InputDecoration(
                       labelText: 'Email',
                       prefixIcon: Icon(Icons.email_outlined),
@@ -84,10 +117,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // ---- Password field ----
                   TextField(
                     controller: _passwordController,
                     obscureText: _obscurePassword,
+                    enabled: !_isLoading,
                     decoration: InputDecoration(
                       labelText: 'Password',
                       prefixIcon: const Icon(Icons.lock_outline),
@@ -109,22 +142,32 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 24),
 
                   // ---- Login button ----
+                  // Shows a spinner instead of text while loading, and
+                  // onPressed is null (disabled) while loading.
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
-                    onPressed: _handleLoginPressed,
-                    child: const Text('Log In', style: TextStyle(fontSize: 16)),
+                    onPressed: _isLoading ? null : _handleLoginPressed,
+                    child: _isLoading
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Log In', style: TextStyle(fontSize: 16)),
                   ),
                   const SizedBox(height: 16),
 
-                  // ---- Link to Signup screen ----
-                  // NOTE: this navigation will be wired up once
-                  // signup_screen.dart also exists (see below).
                   TextButton(
-                    onPressed: () {
-                      Navigator.of(context).pushNamed('/signup');
-                    },
+                    onPressed: _isLoading
+                        ? null
+                        : () {
+                            Navigator.of(context).pushNamed('/signup');
+                          },
                     child: const Text("Don't have an account? Sign up"),
                   ),
                 ],
