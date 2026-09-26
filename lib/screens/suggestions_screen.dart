@@ -18,12 +18,17 @@
 // Neither side could do this alone: the phone has the data but not
 // the pattern-detection logic, and the backend has the logic but not
 // the data.
+//
+// UPDATED Sep 21: sends the saved login token in the Authorization
+// header instead of a hardcoded 'user_id': 'default', matching the
+// same change made to chatbot_screen.dart.
 // =====================================================================
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../db_helper.dart';
+import '../auth_service.dart';
 
 const String kBackendBaseUrl = 'https://recede-nerd-sip.ngrok-free.dev';
 
@@ -91,12 +96,20 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> {
               })
           .toList();
 
-      // ---- STEP 2: send that history to the backend for analysis ----
+      // ---- STEP 2: fetch the saved login token, and send it as a
+      // Bearer token instead of a hardcoded 'user_id'. ----
+      final token = await AuthService.instance.getToken();
+
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+      };
+
+      // ---- STEP 3: send the history to the backend for analysis ----
       final response = await http.post(
         Uri.parse('$kBackendBaseUrl/suggestions'),
-        headers: {'Content-Type': 'application/json'},
+        headers: headers,
         body: jsonEncode({
-          'user_id': 'default',
           'reminder_history': historyForBackend,
         }),
       );
@@ -109,6 +122,11 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> {
           _suggestions = rawSuggestions
               .map((s) => SuggestionItem.fromJson(s))
               .toList();
+          _isLoading = false;
+        });
+      } else if (response.statusCode == 401) {
+        setState(() {
+          _errorMessage = 'Your session has expired. Please log in again.';
           _isLoading = false;
         });
       } else {

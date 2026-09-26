@@ -6,6 +6,11 @@
 // replies (flutter_tts). The chat/database logic from Aug 19-20 is
 // unchanged - this just adds a microphone button and makes the bot
 // speak its replies out loud.
+//
+// UPDATED Sep 21: the /chat call now sends the saved login token in
+// its Authorization header instead of a hardcoded 'user_id': 'default'
+// — Person A's backend now identifies the user from the token, via
+// their Sep 19 auth middleware.
 // =====================================================================
 
 import 'dart:convert';
@@ -16,6 +21,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../db_helper.dart';
+import '../auth_service.dart';
 import 'settings_screen.dart';
 
 const String kBackendBaseUrl = 'https://recede-nerd-sip.ngrok-free.dev';
@@ -204,10 +210,21 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     _scrollToBottom();
 
     try {
+      // UPDATED Sep 21: fetch the saved login token and send it as a
+      // Bearer token in the Authorization header. The backend's auth
+      // middleware (Person A, Sep 19) uses this to identify the user
+      // instead of the old hardcoded 'user_id': 'default'.
+      final token = await AuthService.instance.getToken();
+
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+      };
+
       final response = await http.post(
         Uri.parse('$kBackendBaseUrl/chat'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'message': text, 'user_id': 'default'}),
+        headers: headers,
+        body: jsonEncode({'message': text}),
       );
 
       if (response.statusCode == 200) {
@@ -229,6 +246,16 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
         }
 
         await _executeAction(data['action']);
+      } else if (response.statusCode == 401) {
+        // UPDATED Sep 21: 401 means the token was missing, invalid,
+        // or expired — the backend's auth middleware rejected the
+        // request. Tell the user plainly rather than a generic error.
+        setState(() {
+          _messages.add(ChatMessage(
+            text: 'Your session has expired. Please log in again.',
+            isUser: false,
+          ));
+        });
       } else {
         setState(() {
           _messages.add(ChatMessage(
