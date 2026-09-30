@@ -6,6 +6,10 @@
 // package) and saves them alongside the object. This is what powers
 // the future proximity-based suggestions (e.g. "you're near where
 // you saved your keys").
+//
+// UPDATED Sep 30: "Add Object Location" now also records a
+// "last_modified" timestamp, needed for cloud syncing (comparing
+// phone vs server copies to see which one is newer).
 // =====================================================================
 
 import 'package:flutter/material.dart';
@@ -212,6 +216,7 @@ class _LocationsTabState extends State<LocationsTab> {
                       // object_locations table from Day 1.
                       'latitude': capturedLat,
                       'longitude': capturedLng,
+                      'last_modified': DateTime.now().toIso8601String(),
                     });
 
                     Navigator.pop(context);

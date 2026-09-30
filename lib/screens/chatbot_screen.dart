@@ -14,6 +14,10 @@
 //
 // UPDATED Sep 22: added a Logout button to the AppBar. Clears the
 // saved token and returns to the Login screen.
+//
+// UPDATED Sep 30: reminders created via chat now also record a
+// "last_modified" timestamp (and an explicit null category), needed
+// for cloud syncing.
 // =====================================================================
 
 import 'dart:convert';
@@ -298,6 +302,8 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
           'time': data['time'] ?? '',
           'priority': data['priority'] ?? 'green',
           'completed': 0,
+          'category': null,
+          'last_modified': DateTime.now().toIso8601String(),
         });
         await DBHelper.instance.logContext('reminder_created');
 

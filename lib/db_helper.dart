@@ -6,6 +6,14 @@
 // in Settings on Aug 24 (which, until now, wasn't actually used
 // anywhere else in the app).
 //
+// UPDATED Sep 30: added a "last_modified" column to reminders, notes,
+// and object_locations. This records the exact time (as an ISO8601
+// string) any row was last created or edited on THIS phone. The
+// backend server keeps its own "last_modified" for every row too.
+// When the app syncs, comparing these two timestamps is how the
+// server decides which copy (phone's or server's) is newer, in case
+// the same row was edited in two places before syncing.
+//
 // IMPORTANT - DATABASE MIGRATIONS: since you already have a real
 // database file on your test device from earlier testing, we can't
 // just add a new column to onCreate() - that only runs on a brand
@@ -37,18 +45,19 @@ class DBHelper {
 
     return await openDatabase(
       path,
-      // BUMPED from 1 to 2 - this tells Android "the schema changed,
-      // please run onUpgrade to bring existing databases up to date."
-      version: 2,
+      // BUMPED from 2 to 3 - this tells Android "the schema changed
+      // again, please run onUpgrade to bring existing databases up
+      // to date."
+      version: 3,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
   }
 
   // Runs ONLY the very first time the app is installed - defines the
-  // full, up-to-date schema from scratch (includes the category
-  // column directly, since a brand new install has no old data to
-  // migrate).
+  // full, up-to-date schema from scratch (includes category AND
+  // last_modified directly, since a brand new install has no old
+  // data to migrate).
   Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
       CREATE TABLE reminders (
@@ -58,7 +67,8 @@ class DBHelper {
         time TEXT NOT NULL,
         priority TEXT NOT NULL DEFAULT 'green',
         completed INTEGER NOT NULL DEFAULT 0,
-        category TEXT
+        category TEXT,
+        last_modified TEXT
       )
     ''');
 
@@ -67,7 +77,8 @@ class DBHelper {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
         content TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        last_modified TEXT
       )
     ''');
 
@@ -77,7 +88,8 @@ class DBHelper {
         object_name TEXT NOT NULL,
         location_name TEXT,
         latitude REAL,
-        longitude REAL
+        longitude REAL,
+        last_modified TEXT
       )
     ''');
 
@@ -90,12 +102,17 @@ class DBHelper {
     ''');
   }
 
-  // Runs automatically for anyone who already has version 1 of the
-  // database installed (i.e. everyone testing before today). Adds
-  // the new column to the EXISTING table without deleting any data.
+  // Runs automatically for anyone who already has an older version of
+  // the database installed. Adds new columns to EXISTING tables
+  // without deleting any data.
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await db.execute('ALTER TABLE reminders ADD COLUMN category TEXT');
+    }
+    if (oldVersion < 3) {
+      await db.execute('ALTER TABLE reminders ADD COLUMN last_modified TEXT');
+      await db.execute('ALTER TABLE notes ADD COLUMN last_modified TEXT');
+      await db.execute('ALTER TABLE object_locations ADD COLUMN last_modified TEXT');
     }
   }
 
@@ -117,7 +134,10 @@ class DBHelper {
     final db = await database;
     return await db.update(
       'reminders',
-      {'completed': completed},
+      {
+        'completed': completed,
+        'last_modified': DateTime.now().toIso8601String(),
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -128,10 +148,6 @@ class DBHelper {
     return await db.delete('reminders', where: 'id = ?', whereArgs: [id]);
   }
 
-  // ---- NEW (Aug 28): updates an EXISTING reminder's fields ----
-  // Different from updateReminderStatus (which only ever touches the
-  // 'completed' flag) - this lets any combination of fields (task,
-  // date, time, priority, category) be changed, for real editing.
   Future<int> updateReminder(int id, Map<String, dynamic> updatedFields) async {
     final db = await database;
     return await db.update(

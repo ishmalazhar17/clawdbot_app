@@ -6,6 +6,12 @@
 // finally makes the Settings categories feature actually DO
 // something - until today, you could create categories but nothing
 // in the app used them.
+//
+// UPDATED Sep 30: both "Add Reminder" and "Edit Reminder" now record
+// a "last_modified" timestamp (the exact moment the row was created
+// or changed on THIS phone). This is required for cloud syncing -
+// the server compares this against its own last_modified to decide
+// which copy (phone's or server's) is the newer one.
 // =====================================================================
 
 import 'package:flutter/material.dart';
@@ -169,6 +175,7 @@ class _RemindersTabState extends State<RemindersTab> {
                       'time': timeController.text.trim(),
                       'priority': selectedPriority,
                       'category': selectedCategory,
+                      'last_modified': DateTime.now().toIso8601String(),
                     });
 
                     // Cancel the OLD notification before scheduling
@@ -339,6 +346,7 @@ class _RemindersTabState extends State<RemindersTab> {
                       'priority': selectedPriority,
                       'completed': 0,
                       'category': selectedCategory,
+                      'last_modified': DateTime.now().toIso8601String(),
                     });
 
                     try {

@@ -2,6 +2,10 @@
 // notes_tab.dart — Notes section of the Memory screen.
 //
 // AUG 17 UPDATE: adds a search bar that filters by title or content.
+//
+// UPDATED Sep 30: "Add Note" now also records a "last_modified"
+// timestamp, needed for cloud syncing (comparing phone vs server
+// copies to see which one is newer).
 // =====================================================================
 
 import 'package:flutter/material.dart';
@@ -94,10 +98,13 @@ class _NotesTabState extends State<NotesTab> {
               onPressed: () async {
                 if (titleController.text.trim().isEmpty) return;
 
+                final now = DateTime.now().toIso8601String();
+
                 await DBHelper.instance.insertNote({
                   'title': titleController.text.trim(),
                   'content': contentController.text.trim(),
-                  'created_at': DateTime.now().toIso8601String(),
+                  'created_at': now,
+                  'last_modified': now,
                 });
 
                 Navigator.pop(context);
