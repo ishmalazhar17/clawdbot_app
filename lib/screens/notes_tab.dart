@@ -3,13 +3,16 @@
 //
 // AUG 17 UPDATE: adds a search bar that filters by title or content.
 //
-// UPDATED Sep 30: "Add Note" now also records a "last_modified"
-// timestamp, needed for cloud syncing (comparing phone vs server
-// copies to see which one is newer).
+// UPDATED Sep 30 (local DB): records a "last_modified" timestamp.
+//
+// UPDATED Sep 30 (cloud sync): "Add Note" and "Delete" now also try
+// to push/remove the same note on the server. Fails silently if
+// offline - the local save/delete still works either way.
 // =====================================================================
 
 import 'package:flutter/material.dart';
 import '../db_helper.dart';
+import '../cloud_sync_service.dart';
 
 class NotesTab extends StatefulWidget {
   const NotesTab({super.key});
@@ -44,8 +47,6 @@ class _NotesTabState extends State<NotesTab> {
     _applyFilter();
   }
 
-  // Filters by title OR content — matches if the search text appears
-  // in either field.
   void _applyFilter() {
     final query = _searchController.text.trim().toLowerCase();
     setState(() {
@@ -63,6 +64,8 @@ class _NotesTabState extends State<NotesTab> {
 
   Future<void> _deleteNote(int id) async {
     await DBHelper.instance.deleteNote(id);
+    // ignore: unawaited_futures
+    CloudSyncService.instance.deleteNote(id);
     _refreshNotes();
   }
 
@@ -99,13 +102,17 @@ class _NotesTabState extends State<NotesTab> {
                 if (titleController.text.trim().isEmpty) return;
 
                 final now = DateTime.now().toIso8601String();
-
-                await DBHelper.instance.insertNote({
+                final newNote = {
                   'title': titleController.text.trim(),
                   'content': contentController.text.trim(),
                   'created_at': now,
                   'last_modified': now,
-                });
+                };
+
+                await DBHelper.instance.insertNote(newNote);
+
+                // ignore: unawaited_futures
+                CloudSyncService.instance.createNote(newNote);
 
                 Navigator.pop(context);
                 _refreshNotes();

@@ -2,22 +2,25 @@
 // reminders_tab.dart — Reminders section of the Memory screen.
 //
 // UPDATED Aug 27: adds a category picker to the Add form, pulling
-// from the categories you set up in Settings (Aug 24). This is what
-// finally makes the Settings categories feature actually DO
-// something - until today, you could create categories but nothing
-// in the app used them.
+// from the categories you set up in Settings (Aug 24).
 //
-// UPDATED Sep 30: both "Add Reminder" and "Edit Reminder" now record
-// a "last_modified" timestamp (the exact moment the row was created
-// or changed on THIS phone). This is required for cloud syncing -
-// the server compares this against its own last_modified to decide
-// which copy (phone's or server's) is the newer one.
+// UPDATED Sep 30 (local DB): both "Add" and "Edit" now record a
+// "last_modified" timestamp, needed for cloud syncing.
+//
+// UPDATED Sep 30 (cloud sync): every Add/Edit/Delete now ALSO tries
+// to push that same change to the server via CloudSyncService. If
+// there's no internet or the server is unreachable, this silently
+// fails and the LOCAL save still succeeds — so the app keeps working
+// offline. This is a "best effort" sync for individual actions; the
+// full /sync endpoint (still being built by Person A) will handle
+// properly catching up everything that was missed while offline.
 // =====================================================================
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../db_helper.dart';
 import '../notification_helper.dart';
+import '../cloud_sync_service.dart';
 import 'settings_screen.dart';
 
 class RemindersTab extends StatefulWidget {
@@ -68,25 +71,44 @@ class _RemindersTabState extends State<RemindersTab> {
 
   Future<void> _deleteReminder(int id) async {
     await DBHelper.instance.deleteReminder(id);
+    // Best-effort cloud delete - ignored if it fails (offline, etc).
+    // ignore: unawaited_futures
+    CloudSyncService.instance.deleteReminder(id);
     _refreshReminders();
   }
 
   // ---- NEW TODAY: marks a reminder done/not-done ----
-  // updateReminderStatus already existed in db_helper.dart from Day 1
-  // - it just had no UI hooked up to it until now.
   Future<void> _toggleCompleted(int id, bool isCurrentlyCompleted) async {
     await DBHelper.instance.updateReminderStatus(id, isCurrentlyCompleted ? 0 : 1);
+    // Best-effort cloud update of just the completed status.
+    // ignore: unawaited_futures
+    _pushReminderUpdate(id);
     _refreshReminders();
   }
 
+  // ---------------------------------------------------------------
+  // NEW TODAY: reads a reminder's current full data from the LOCAL
+  // database (by id) and pushes that complete row to the cloud. This
+  // is used after any local-only update (like the checkbox toggle)
+  // so the cloud version doesn't need duplicating the same fields
+  // twice in two different places.
+  // ---------------------------------------------------------------
+  Future<void> _pushReminderUpdate(int id) async {
+    final all = await DBHelper.instance.getReminders();
+    final match = all.where((r) => r['id'] == id).toList();
+    if (match.isEmpty) return;
+    final reminder = match.first;
+    await CloudSyncService.instance.updateReminder(id, {
+      'task': reminder['task'],
+      'date': reminder['date'],
+      'time': reminder['time'],
+      'priority': reminder['priority'],
+      'completed': reminder['completed'],
+      'category': reminder['category'],
+    });
+  }
+
   // ---- NEW (Aug 28): edit an EXISTING reminder ----
-  // Reuses the same form layout as "Add", but pre-fills every field
-  // with the reminder's current values, and on Save UPDATES the
-  // existing row instead of inserting a new one. Also correctly
-  // handles the notification: the OLD scheduled notification (at the
-  // old time) is cancelled first, then a new one is scheduled at
-  // whatever time the user just set - otherwise editing the time
-  // would leave a stale notification firing at the wrong moment.
   void _showEditReminderDialog(Map<String, dynamic> reminder) async {
     final availableCategories = await _loadCategories();
     if (!mounted) return;
@@ -169,13 +191,27 @@ class _RemindersTabState extends State<RemindersTab> {
                   onPressed: () async {
                     if (taskController.text.trim().isEmpty) return;
 
-                    await DBHelper.instance.updateReminder(reminderId, {
+                    final updatedFields = {
                       'task': taskController.text.trim(),
                       'date': dateController.text.trim(),
                       'time': timeController.text.trim(),
                       'priority': selectedPriority,
                       'category': selectedCategory,
                       'last_modified': DateTime.now().toIso8601String(),
+                    };
+
+                    await DBHelper.instance.updateReminder(reminderId, updatedFields);
+
+                    // Best-effort cloud update - doesn't block the UI
+                    // or throw if it fails (e.g. offline).
+                    // ignore: unawaited_futures
+                    CloudSyncService.instance.updateReminder(reminderId, {
+                      'task': updatedFields['task'],
+                      'date': updatedFields['date'],
+                      'time': updatedFields['time'],
+                      'priority': updatedFields['priority'],
+                      'category': updatedFields['category'],
+                      'completed': reminder['completed'] ?? 0,
                     });
 
                     // Cancel the OLD notification before scheduling
@@ -231,30 +267,20 @@ class _RemindersTabState extends State<RemindersTab> {
     }
   }
 
-  // ---- NEW TODAY: reads the categories saved in Settings ----
   Future<List<String>> _loadCategories() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getStringList(SettingsKeys.categories) ?? [];
   }
 
   void _showAddReminderDialog() async {
-    // Load the current categories BEFORE opening the dialog, so
-    // they're ready immediately rather than showing a loading state
-    // inside the dialog itself.
     final availableCategories = await _loadCategories();
 
     final taskController = TextEditingController();
     final dateController = TextEditingController();
     final timeController = TextEditingController();
     String selectedPriority = 'green';
-    // Starts as null (no category selected) - completely optional,
-    // since not everyone wants to categorize every reminder.
     String? selectedCategory;
 
-    // Guard for using BuildContext after an "await" above - Flutter
-    // warns about this since the widget could theoretically be gone
-    // by the time _loadCategories() finishes. "mounted" confirms this
-    // screen is still on-screen before we try to show a dialog on it.
     if (!mounted) return;
 
     showDialog(
@@ -302,9 +328,6 @@ class _RemindersTabState extends State<RemindersTab> {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    // ---- NEW TODAY: the category dropdown ----
-                    // If no categories exist yet, this shows a helper
-                    // message instead of an empty/confusing dropdown.
                     if (availableCategories.isEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
@@ -339,7 +362,7 @@ class _RemindersTabState extends State<RemindersTab> {
                   onPressed: () async {
                     if (taskController.text.trim().isEmpty) return;
 
-                    final id = await DBHelper.instance.insertReminder({
+                    final newReminder = {
                       'task': taskController.text.trim(),
                       'date': dateController.text.trim(),
                       'time': timeController.text.trim(),
@@ -347,7 +370,14 @@ class _RemindersTabState extends State<RemindersTab> {
                       'completed': 0,
                       'category': selectedCategory,
                       'last_modified': DateTime.now().toIso8601String(),
-                    });
+                    };
+
+                    final id = await DBHelper.instance.insertReminder(newReminder);
+
+                    // Best-effort cloud create - doesn't block the UI
+                    // or throw if it fails (e.g. offline).
+                    // ignore: unawaited_futures
+                    CloudSyncService.instance.createReminder(newReminder);
 
                     try {
                       final dateParts = dateController.text.trim().split('-');
@@ -441,18 +471,12 @@ class _RemindersTabState extends State<RemindersTab> {
                     itemCount: _filteredReminders.length,
                     itemBuilder: (context, index) {
                       final reminder = _filteredReminders[index];
-                      // ---- NEW TODAY: shows the category as a small
-                      // subtitle line, only when one was actually set ----
                       final category = reminder['category'];
                       final hasCategory = category != null && category.toString().isNotEmpty;
 
                       final isCompleted = reminder['completed'] == 1;
 
                       return ListTile(
-                        // The checkbox is now the primary leading
-                        // element (the standard to-do-app pattern);
-                        // priority still shows as a small colored dot
-                        // next to it so neither indicator is lost.
                         leading: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -469,10 +493,6 @@ class _RemindersTabState extends State<RemindersTab> {
                         ),
                         title: Text(
                           reminder['task'],
-                          // Strikethrough + greyed out text is the
-                          // universal "done" visual convention - it
-                          // stays in the list (not hidden) so the
-                          // user can still un-check it if needed.
                           style: isCompleted
                               ? TextStyle(
                                   decoration: TextDecoration.lineThrough,
@@ -485,10 +505,6 @@ class _RemindersTabState extends State<RemindersTab> {
                               ? '${reminder['date']} at ${reminder['time']} • $category'
                               : '${reminder['date']} at ${reminder['time']}',
                         ),
-                        // NEW (Aug 28): tapping the tile itself
-                        // (anywhere except the checkbox/delete icon,
-                        // which have their own separate tap targets)
-                        // opens the edit dialog.
                         onTap: () => _showEditReminderDialog(reminder),
                         trailing: IconButton(
                           icon: const Icon(Icons.delete, color: Colors.red),

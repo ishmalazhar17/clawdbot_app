@@ -1,20 +1,19 @@
 // =====================================================================
 // locations_tab.dart — Object Locations section of the Memory screen.
 //
-// UPDATED Aug 24: adds a "Use my current location" button to the Add
-// dialog, which captures real GPS coordinates (via the geolocator
-// package) and saves them alongside the object. This is what powers
-// the future proximity-based suggestions (e.g. "you're near where
-// you saved your keys").
+// UPDATED Aug 24: adds a "Use my current location" button.
 //
-// UPDATED Sep 30: "Add Object Location" now also records a
-// "last_modified" timestamp, needed for cloud syncing (comparing
-// phone vs server copies to see which one is newer).
+// UPDATED Sep 30 (local DB): records a "last_modified" timestamp.
+//
+// UPDATED Sep 30 (cloud sync): "Add" and "Delete" now also try to
+// push/remove the same location on the server. Fails silently if
+// offline.
 // =====================================================================
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../db_helper.dart';
+import '../cloud_sync_service.dart';
 
 class LocationsTab extends StatefulWidget {
   const LocationsTab({super.key});
@@ -66,14 +65,11 @@ class _LocationsTabState extends State<LocationsTab> {
 
   Future<void> _deleteLocation(int id) async {
     await DBHelper.instance.deleteObjectLocation(id);
+    // ignore: unawaited_futures
+    CloudSyncService.instance.deleteObjectLocation(id);
     _refreshLocations();
   }
 
-  // ---- NEW TODAY: fetches the phone's real current GPS coordinates ----
-  // Handles the full permission flow: checks if location services are
-  // even turned on, checks/requests permission, and only then reads
-  // the actual position. Returns null at any failure point, so the
-  // calling code can show a clear message instead of crashing.
   Future<Position?> _getCurrentLocation(
       void Function(String) onError) async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -111,8 +107,6 @@ class _LocationsTabState extends State<LocationsTab> {
     final objectController = TextEditingController();
     final locationController = TextEditingController();
 
-    // These track the captured coordinates and dialog-local status,
-    // shared across rebuilds of the dialog's own StatefulBuilder.
     double? capturedLat;
     double? capturedLng;
     bool isFetchingLocation = false;
@@ -121,11 +115,6 @@ class _LocationsTabState extends State<LocationsTab> {
     showDialog(
       context: context,
       builder: (context) {
-        // StatefulBuilder lets a small piece of UI (this dialog) have
-        // its OWN local state and rebuild itself, without needing to
-        // rebuild the whole LocationsTab screen behind it. This is
-        // necessary because showDialog's normal builder doesn't have
-        // access to setState from the parent widget.
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
@@ -148,7 +137,6 @@ class _LocationsTabState extends State<LocationsTab> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  // ---- NEW TODAY: the "use my location" button ----
                   OutlinedButton.icon(
                     icon: isFetchingLocation
                         ? const SizedBox(
@@ -207,17 +195,18 @@ class _LocationsTabState extends State<LocationsTab> {
                   onPressed: () async {
                     if (objectController.text.trim().isEmpty) return;
 
-                    await DBHelper.instance.insertObjectLocation({
+                    final newLocation = {
                       'object_name': objectController.text.trim(),
                       'location_name': locationController.text.trim(),
-                      // Saves the real captured GPS coordinates if the
-                      // button was used, otherwise stays null - exactly
-                      // matching the nullable columns already in the
-                      // object_locations table from Day 1.
                       'latitude': capturedLat,
                       'longitude': capturedLng,
                       'last_modified': DateTime.now().toIso8601String(),
-                    });
+                    };
+
+                    await DBHelper.instance.insertObjectLocation(newLocation);
+
+                    // ignore: unawaited_futures
+                    CloudSyncService.instance.createObjectLocation(newLocation);
 
                     Navigator.pop(context);
                     _refreshLocations();
@@ -265,10 +254,6 @@ class _LocationsTabState extends State<LocationsTab> {
                     itemCount: _filteredLocations.length,
                     itemBuilder: (context, index) {
                       final location = _filteredLocations[index];
-                      // Shows a small pin icon next to entries that
-                      // have real GPS coordinates saved, so the user
-                      // can tell at a glance which ones are precisely
-                      // located versus just a text description.
                       final hasCoordinates = location['latitude'] != null;
                       return ListTile(
                         leading: Icon(
