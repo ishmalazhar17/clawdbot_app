@@ -1,19 +1,20 @@
 // =====================================================================
 // reminders_tab.dart — Reminders section of the Memory screen.
 //
-// UPDATED Aug 27: adds a category picker to the Add form, pulling
-// from the categories you set up in Settings (Aug 24).
+// UPDATED Aug 27: adds a category picker to the Add form.
 //
-// UPDATED Sep 30 (local DB): both "Add" and "Edit" now record a
-// "last_modified" timestamp, needed for cloud syncing.
+// UPDATED Sep 30 (local DB): "Add" and "Edit" record a "last_modified"
+// timestamp, needed for cloud syncing.
 //
-// UPDATED Sep 30 (cloud sync): every Add/Edit/Delete now ALSO tries
-// to push that same change to the server via CloudSyncService. If
-// there's no internet or the server is unreachable, this silently
-// fails and the LOCAL save still succeeds — so the app keeps working
-// offline. This is a "best effort" sync for individual actions; the
-// full /sync endpoint (still being built by Person A) will handle
-// properly catching up everything that was missed while offline.
+// UPDATED Sep 30 (cloud sync): every Add/Edit/Delete tries to push
+// that change to the server via CloudSyncService.
+//
+// UPDATED Sep 30 (offline retry queue): if a push fails (no
+// internet), the change is no longer just silently dropped. New
+// reminders get a temporary negative id and stay marked "unsynced"
+// until pushed; edits mark the row "unsynced"; deletes of a
+// server-known reminder are queued in pending_deletes. The next
+// "Sync Now" retries all of these automatically before pulling.
 // =====================================================================
 
 import 'package:flutter/material.dart';
@@ -69,36 +70,49 @@ class _RemindersTabState extends State<RemindersTab> {
     });
   }
 
+  // ---------------------------------------------------------------
+  // UPDATED: if this reminder never made it to the server (negative
+  // id), there's nothing to delete remotely - just remove it locally.
+  // If it's a real server-known reminder (positive id), try to
+  // delete it on the server now; if that fails (offline), queue it
+  // in pending_deletes so a future Sync Now retries the delete.
+  // ---------------------------------------------------------------
   Future<void> _deleteReminder(int id) async {
     await DBHelper.instance.deleteReminder(id);
-    // Best-effort cloud delete - ignored if it fails (offline, etc).
-    // ignore: unawaited_futures
-    CloudSyncService.instance.deleteReminder(id);
+
+    if (id > 0) {
+      final result = await CloudSyncService.instance.deleteReminder(id);
+      if (!result['success']) {
+        await DBHelper.instance.addPendingDelete('reminders', id);
+      }
+    }
+
     _refreshReminders();
   }
 
-  // ---- NEW TODAY: marks a reminder done/not-done ----
+  // ---- marks a reminder done/not-done ----
   Future<void> _toggleCompleted(int id, bool isCurrentlyCompleted) async {
+    // updateReminderStatus already marks the row synced = 0.
     await DBHelper.instance.updateReminderStatus(id, isCurrentlyCompleted ? 0 : 1);
-    // Best-effort cloud update of just the completed status.
     // ignore: unawaited_futures
     _pushReminderUpdate(id);
     _refreshReminders();
   }
 
   // ---------------------------------------------------------------
-  // NEW TODAY: reads a reminder's current full data from the LOCAL
-  // database (by id) and pushes that complete row to the cloud. This
-  // is used after any local-only update (like the checkbox toggle)
-  // so the cloud version doesn't need duplicating the same fields
-  // twice in two different places.
+  // Reads a reminder's current full data from the LOCAL database (by
+  // id) and pushes that complete row to the cloud. On success, marks
+  // the row synced = 1 so it won't be re-pushed unnecessarily by the
+  // next Sync Now. On failure (offline), the row stays synced = 0 and
+  // will be retried automatically next time.
   // ---------------------------------------------------------------
   Future<void> _pushReminderUpdate(int id) async {
     final all = await DBHelper.instance.getReminders();
     final match = all.where((r) => r['id'] == id).toList();
     if (match.isEmpty) return;
     final reminder = match.first;
-    await CloudSyncService.instance.updateReminder(id, {
+
+    final result = await CloudSyncService.instance.updateReminder(id, {
       'task': reminder['task'],
       'date': reminder['date'],
       'time': reminder['time'],
@@ -106,9 +120,13 @@ class _RemindersTabState extends State<RemindersTab> {
       'completed': reminder['completed'],
       'category': reminder['category'],
     });
+
+    if (result['success']) {
+      await DBHelper.instance.markReminderSynced(id);
+    }
   }
 
-  // ---- NEW (Aug 28): edit an EXISTING reminder ----
+  // ---- edit an EXISTING reminder ----
   void _showEditReminderDialog(Map<String, dynamic> reminder) async {
     final availableCategories = await _loadCategories();
     if (!mounted) return;
@@ -198,25 +216,32 @@ class _RemindersTabState extends State<RemindersTab> {
                       'priority': selectedPriority,
                       'category': selectedCategory,
                       'last_modified': DateTime.now().toIso8601String(),
+                      'synced': 0,
                     };
 
                     await DBHelper.instance.updateReminder(reminderId, updatedFields);
 
-                    // Best-effort cloud update - doesn't block the UI
-                    // or throw if it fails (e.g. offline).
-                    // ignore: unawaited_futures
-                    CloudSyncService.instance.updateReminder(reminderId, {
-                      'task': updatedFields['task'],
-                      'date': updatedFields['date'],
-                      'time': updatedFields['time'],
-                      'priority': updatedFields['priority'],
-                      'category': updatedFields['category'],
-                      'completed': reminder['completed'] ?? 0,
-                    });
+                    // Try to push now. Only positive (server-known)
+                    // ids get pushed as an update here - a still-
+                    // unsynced NEW reminder (negative id) being
+                    // edited will simply get created with its latest
+                    // content the next time the pending queue runs.
+                    if (reminderId > 0) {
+                      final result = await CloudSyncService.instance.updateReminder(reminderId, {
+                        'task': updatedFields['task'],
+                        'date': updatedFields['date'],
+                        'time': updatedFields['time'],
+                        'priority': updatedFields['priority'],
+                        'category': updatedFields['category'],
+                        'completed': reminder['completed'] ?? 0,
+                      });
+                      if (result['success']) {
+                        await DBHelper.instance.markReminderSynced(reminderId);
+                      }
+                    }
 
                     // Cancel the OLD notification before scheduling
-                    // the new one - critical, otherwise a stale
-                    // notification at the old time would still fire.
+                    // the new one.
                     await NotificationHelper.instance.cancelNotification(reminderId);
 
                     try {
@@ -362,7 +387,12 @@ class _RemindersTabState extends State<RemindersTab> {
                   onPressed: () async {
                     if (taskController.text.trim().isEmpty) return;
 
+                    // Temporary negative id - means "server doesn't
+                    // know about this yet."
+                    final tempId = DBHelper.instance.generateTempId();
+
                     final newReminder = {
+                      'id': tempId,
                       'task': taskController.text.trim(),
                       'date': dateController.text.trim(),
                       'time': timeController.text.trim(),
@@ -370,14 +400,42 @@ class _RemindersTabState extends State<RemindersTab> {
                       'completed': 0,
                       'category': selectedCategory,
                       'last_modified': DateTime.now().toIso8601String(),
+                      'synced': 0,
                     };
 
-                    final id = await DBHelper.instance.insertReminder(newReminder);
+                    await DBHelper.instance.insertReminder(newReminder);
 
-                    // Best-effort cloud create - doesn't block the UI
-                    // or throw if it fails (e.g. offline).
-                    // ignore: unawaited_futures
-                    CloudSyncService.instance.createReminder(newReminder);
+                    // Try to push it right now. If it succeeds (we're
+                    // online), swap the local row over to the
+                    // server's real id immediately. If it fails
+                    // (offline), it just stays queued with its
+                    // negative id until the next Sync Now.
+                    final pushResult = await CloudSyncService.instance.createReminder({
+                      'task': newReminder['task'],
+                      'date': newReminder['date'],
+                      'time': newReminder['time'],
+                      'priority': newReminder['priority'],
+                      'completed': newReminder['completed'],
+                      'category': newReminder['category'],
+                    });
+
+                    int notificationId = tempId;
+
+                    if (pushResult['success']) {
+                      final serverData = pushResult['data'];
+                      await DBHelper.instance.replaceReminderId(tempId, {
+                        'id': serverData['id'],
+                        'task': serverData['task'],
+                        'date': serverData['date'],
+                        'time': serverData['time'],
+                        'priority': serverData['priority'],
+                        'completed': serverData['completed'],
+                        'category': serverData['category'],
+                        'last_modified': serverData['last_modified'],
+                        'synced': 1,
+                      });
+                      notificationId = serverData['id'];
+                    }
 
                     try {
                       final dateParts = dateController.text.trim().split('-');
@@ -392,7 +450,7 @@ class _RemindersTabState extends State<RemindersTab> {
                       );
 
                       await NotificationHelper.instance.scheduleNotification(
-                        id: id,
+                        id: notificationId,
                         title: 'Clawd Bot Reminder',
                         body: taskController.text.trim(),
                         scheduledDate: scheduledDate,

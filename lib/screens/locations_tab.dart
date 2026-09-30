@@ -5,9 +5,14 @@
 //
 // UPDATED Sep 30 (local DB): records a "last_modified" timestamp.
 //
-// UPDATED Sep 30 (cloud sync): "Add" and "Delete" now also try to
-// push/remove the same location on the server. Fails silently if
-// offline.
+// UPDATED Sep 30 (cloud sync): "Add" and "Delete" try to push/remove
+// the same location on the server.
+//
+// UPDATED Sep 30 (offline retry queue): a new location gets a
+// temporary negative id and stays marked "unsynced" until it's
+// actually pushed; deleting a server-known location that can't be
+// deleted right now (e.g. offline) gets queued in pending_deletes,
+// and the next "Sync Now" retries it automatically.
 // =====================================================================
 
 import 'package:flutter/material.dart';
@@ -63,10 +68,23 @@ class _LocationsTabState extends State<LocationsTab> {
     });
   }
 
+  // ---------------------------------------------------------------
+  // If this location never made it to the server (negative id),
+  // there's nothing to delete remotely - just remove it locally. If
+  // it's a real server-known location (positive id), try to delete
+  // it on the server now; if that fails (offline), queue it in
+  // pending_deletes so a future Sync Now retries the delete.
+  // ---------------------------------------------------------------
   Future<void> _deleteLocation(int id) async {
     await DBHelper.instance.deleteObjectLocation(id);
-    // ignore: unawaited_futures
-    CloudSyncService.instance.deleteObjectLocation(id);
+
+    if (id > 0) {
+      final result = await CloudSyncService.instance.deleteObjectLocation(id);
+      if (!result['success']) {
+        await DBHelper.instance.addPendingDelete('object_locations', id);
+      }
+    }
+
     _refreshLocations();
   }
 
@@ -195,18 +213,46 @@ class _LocationsTabState extends State<LocationsTab> {
                   onPressed: () async {
                     if (objectController.text.trim().isEmpty) return;
 
+                    // Temporary negative id - means "server doesn't
+                    // know about this yet."
+                    final tempId = DBHelper.instance.generateTempId();
+
                     final newLocation = {
+                      'id': tempId,
                       'object_name': objectController.text.trim(),
                       'location_name': locationController.text.trim(),
                       'latitude': capturedLat,
                       'longitude': capturedLng,
                       'last_modified': DateTime.now().toIso8601String(),
+                      'synced': 0,
                     };
 
                     await DBHelper.instance.insertObjectLocation(newLocation);
 
-                    // ignore: unawaited_futures
-                    CloudSyncService.instance.createObjectLocation(newLocation);
+                    // Try to push it right now. If it succeeds (we're
+                    // online), swap the local row over to the
+                    // server's real id immediately. If it fails
+                    // (offline), it just stays queued with its
+                    // negative id until the next Sync Now.
+                    final pushResult = await CloudSyncService.instance.createObjectLocation({
+                      'object_name': newLocation['object_name'],
+                      'location_name': newLocation['location_name'],
+                      'latitude': newLocation['latitude'],
+                      'longitude': newLocation['longitude'],
+                    });
+
+                    if (pushResult['success']) {
+                      final serverData = pushResult['data'];
+                      await DBHelper.instance.replaceObjectLocationId(tempId, {
+                        'id': serverData['id'],
+                        'object_name': serverData['object_name'],
+                        'location_name': serverData['location_name'],
+                        'latitude': serverData['latitude'],
+                        'longitude': serverData['longitude'],
+                        'last_modified': serverData['last_modified'],
+                        'synced': 1,
+                      });
+                    }
 
                     Navigator.pop(context);
                     _refreshLocations();

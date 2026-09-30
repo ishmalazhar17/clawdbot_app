@@ -4,10 +4,16 @@
 //
 // UPDATED Aug 24: added a gear icon in the AppBar that opens the new
 // Settings screen.
+//
+// UPDATED Sep 30: added a "Sync Now" button in the AppBar. Pulls the
+// latest data from the server (via CloudSyncService) and replaces
+// the local copy, so this phone catches up with anything that
+// happened on the server while it was offline or on another device.
 // =====================================================================
 
 import 'package:flutter/material.dart';
 import '../db_helper.dart';
+import '../cloud_sync_service.dart';
 import 'settings_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -22,6 +28,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Map<String, dynamic>> _upcomingReminders = [];
   List<Map<String, dynamic>> _recentNotes = [];
   bool _loading = true;
+  bool _syncing = false;
 
   @override
   void initState() {
@@ -61,6 +68,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
+  // ---- NEW TODAY: pulls the latest data from the server ----
+  Future<void> _handleSyncNow() async {
+    setState(() {
+      _syncing = true;
+    });
+
+    final success = await CloudSyncService.instance.syncNow();
+
+    if (!mounted) return;
+
+    setState(() {
+      _syncing = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Synced! Your data is up to date.'
+              : 'Could not reach the server. Check your connection.',
+        ),
+      ),
+    );
+
+    if (success) {
+      await _loadDashboardData();
+    }
+  }
+
   Widget _sectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
@@ -77,6 +113,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         title: const Text('Dashboard'),
         actions: [
+          // ---- NEW TODAY: Sync Now button ----
+          IconButton(
+            icon: _syncing
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.sync),
+            tooltip: 'Sync Now',
+            onPressed: _syncing ? null : _handleSyncNow,
+          ),
           // ---- NEW TODAY: gear icon that opens Settings ----
           // Navigator.push adds a new screen ON TOP of the current
           // one (with a back arrow to return), unlike the bottom nav

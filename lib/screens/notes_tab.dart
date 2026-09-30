@@ -5,9 +5,14 @@
 //
 // UPDATED Sep 30 (local DB): records a "last_modified" timestamp.
 //
-// UPDATED Sep 30 (cloud sync): "Add Note" and "Delete" now also try
-// to push/remove the same note on the server. Fails silently if
-// offline - the local save/delete still works either way.
+// UPDATED Sep 30 (cloud sync): "Add Note" and "Delete" try to push/
+// remove the same note on the server.
+//
+// UPDATED Sep 30 (offline retry queue): a new note gets a temporary
+// negative id and stays marked "unsynced" until it's actually pushed;
+// deleting a server-known note that can't be deleted right now (e.g.
+// offline) gets queued in pending_deletes, and the next "Sync Now"
+// retries it automatically.
 // =====================================================================
 
 import 'package:flutter/material.dart';
@@ -62,10 +67,23 @@ class _NotesTabState extends State<NotesTab> {
     });
   }
 
+  // ---------------------------------------------------------------
+  // If this note never made it to the server (negative id), there's
+  // nothing to delete remotely - just remove it locally. If it's a
+  // real server-known note (positive id), try to delete it on the
+  // server now; if that fails (offline), queue it in pending_deletes
+  // so a future Sync Now retries the delete.
+  // ---------------------------------------------------------------
   Future<void> _deleteNote(int id) async {
     await DBHelper.instance.deleteNote(id);
-    // ignore: unawaited_futures
-    CloudSyncService.instance.deleteNote(id);
+
+    if (id > 0) {
+      final result = await CloudSyncService.instance.deleteNote(id);
+      if (!result['success']) {
+        await DBHelper.instance.addPendingDelete('notes', id);
+      }
+    }
+
     _refreshNotes();
   }
 
@@ -102,17 +120,44 @@ class _NotesTabState extends State<NotesTab> {
                 if (titleController.text.trim().isEmpty) return;
 
                 final now = DateTime.now().toIso8601String();
+
+                // Temporary negative id - means "server doesn't know
+                // about this yet."
+                final tempId = DBHelper.instance.generateTempId();
+
                 final newNote = {
+                  'id': tempId,
                   'title': titleController.text.trim(),
                   'content': contentController.text.trim(),
                   'created_at': now,
                   'last_modified': now,
+                  'synced': 0,
                 };
 
                 await DBHelper.instance.insertNote(newNote);
 
-                // ignore: unawaited_futures
-                CloudSyncService.instance.createNote(newNote);
+                // Try to push it right now. If it succeeds (we're
+                // online), swap the local row over to the server's
+                // real id immediately. If it fails (offline), it
+                // just stays queued with its negative id until the
+                // next Sync Now.
+                final pushResult = await CloudSyncService.instance.createNote({
+                  'title': newNote['title'],
+                  'content': newNote['content'],
+                  'created_at': newNote['created_at'],
+                });
+
+                if (pushResult['success']) {
+                  final serverData = pushResult['data'];
+                  await DBHelper.instance.replaceNoteId(tempId, {
+                    'id': serverData['id'],
+                    'title': serverData['title'],
+                    'content': serverData['content'],
+                    'created_at': serverData['created_at'],
+                    'last_modified': serverData['last_modified'],
+                    'synced': 1,
+                  });
+                }
 
                 Navigator.pop(context);
                 _refreshNotes();
@@ -132,7 +177,7 @@ class _NotesTabState extends State<NotesTab> {
         onPressed: _showAddNoteDialog,
         child: const Icon(Icons.add),
       ),
-            body: Column(
+      body: Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(12),
