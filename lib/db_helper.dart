@@ -408,4 +408,31 @@ class DBHelper {
       }
     });
   }
+
+  // ===================================================================
+  // CLEAR ALL LOCAL DATA
+  //
+  // The local database holds only ONE account's data at a time - there
+  // is no per-user separation locally (reminders/notes/locations have
+  // no user_id column). Without this, logging out and into a DIFFERENT
+  // account would leave the previous account's cached data sitting in
+  // these tables: it would flash on screen before the next sync, AND
+  // (worse) any of the previous account's still-unsynced local edits
+  // would get pushed to the NEW account's cloud data the next time
+  // Sync Now runs.
+  //
+  // Called on logout (so nothing lingers after signing out) and right
+  // before a fresh login's first sync-down (belt-and-braces, in case
+  // the app was killed before a previous logout finished cleaning up).
+  // ===================================================================
+  Future<void> clearAllLocalData() async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.delete('reminders');
+      await txn.delete('notes');
+      await txn.delete('object_locations');
+      await txn.delete('pending_deletes');
+      await txn.delete('context_logs');
+    });
+  }
 }

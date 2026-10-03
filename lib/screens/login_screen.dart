@@ -6,10 +6,19 @@
 // using flutter_secure_storage. On success, navigates to the main
 // app (HomeNavigation). On failure, shows the real error message
 // from the backend instead of the old placeholder snackbar.
+//
+// UPDATED Oct 3: the local database holds only ONE account's data at
+// a time (no per-user separation locally). On a successful login we
+// now wipe any leftover local data and pull this account's real data
+// down BEFORE navigating to the Dashboard — otherwise the Dashboard
+// could show (or keep showing until the user taps Sync) whichever
+// account's data was cached locally from a previous session.
 // =====================================================================
 
 import 'package:flutter/material.dart';
 import '../auth_service.dart';
+import '../db_helper.dart';
+import '../cloud_sync_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -55,16 +64,31 @@ class _LoginScreenState extends State<LoginScreen> {
     // crash the app.
     if (!mounted) return;
 
-    setState(() {
-      _isLoading = false;
-    });
-
     if (result['success'] == true) {
+      // NEW: wipe any leftover local data from a previous account on
+      // this device (belt-and-braces, in case a previous session was
+      // killed instead of logging out normally), then pull THIS
+      // account's real data down from the server BEFORE showing the
+      // Dashboard. Without this, the Dashboard could briefly flash —
+      // or silently keep showing — whichever account's data happened
+      // to be cached locally before this login.
+      await DBHelper.instance.clearAllLocalData();
+      await CloudSyncService.instance.syncNow();
+
+      if (!mounted) return;
+
+      setState(() {
+        _isLoading = false;
+      });
+
       // Login worked — go to the main app. pushReplacementNamed (not
       // pushNamed) so the user can't tap "back" and land on the
       // Login screen again after logging in.
       Navigator.of(context).pushReplacementNamed('/home');
     } else {
+      setState(() {
+        _isLoading = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(result['error'] ?? 'Login failed')),
       );

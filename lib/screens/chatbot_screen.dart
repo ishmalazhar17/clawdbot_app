@@ -18,6 +18,12 @@
 // UPDATED Sep 30: reminders created via chat now also record a
 // "last_modified" timestamp (and an explicit null category), needed
 // for cloud syncing.
+//
+// UPDATED Oct 3: logout now also wipes the local SQLite cache
+// (clearAllLocalData), so nothing from this account lingers on the
+// device after signing out — otherwise the next account to log in on
+// this device would briefly see (or keep seeing) this account's old
+// reminders/notes/locations before its own data got synced down.
 // =====================================================================
 
 import 'dart:convert';
@@ -397,6 +403,9 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
   // NEW Sep 22: shows a confirm dialog, then logs the user out and
   // sends them back to the Login screen with the entire navigation
   // history cleared (so "back" can't return to the logged-in app).
+  //
+  // UPDATED Oct 3: also wipes the local SQLite cache so nothing from
+  // this account lingers on the device after logout.
   Future<void> _handleLogout() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -419,6 +428,12 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     if (confirmed != true) return;
 
     await AuthService.instance.logout();
+
+    // NEW: wipe the local cache so no trace of this account's data
+    // lingers on the device, and so the next login starts from a
+    // clean slate instead of briefly showing this account's
+    // reminders/notes before its first sync completes.
+    await DBHelper.instance.clearAllLocalData();
 
     if (!mounted) return;
 

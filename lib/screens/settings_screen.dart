@@ -13,6 +13,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'caregiver_screen.dart';
 
 // These keys are used to read/write the same settings from BOTH this
 // screen AND chatbot_screen.dart - keeping them as constants here
@@ -142,6 +143,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             value: _voiceRepliesEnabled,
             onChanged: _toggleVoiceReplies,
+          ),
+
+          const Divider(),
+
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+            child: Text(
+              'Family',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.people_outline),
+            title: const Text('Family & Caregivers'),
+            subtitle: const Text('Invite a caregiver or link to a family member'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const CaregiverScreen()),
+              );
+            },
           ),
 
           const Divider(),

@@ -7,10 +7,18 @@
 // a Login screen they'd have to fill in again — one less step for
 // someone with memory difficulties, which fits this app's whole
 // purpose.
+//
+// UPDATED Oct 3: also wipes the local SQLite cache before navigating
+// to the Dashboard. The device might still have another account's
+// cached data sitting in it (e.g. someone signed up for a brand-new
+// account without logging out of a previous one first) — without
+// this, the new account's Dashboard could briefly show that old
+// data.
 // =====================================================================
 
 import 'package:flutter/material.dart';
 import '../auth_service.dart';
+import '../db_helper.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -71,13 +79,24 @@ class _SignupScreenState extends State<SignupScreen> {
 
     if (!mounted) return;
 
-    setState(() {
-      _isLoading = false;
-    });
-
     if (loginResult['success'] == true) {
+      // NEW: wipe any leftover local data from a previous account on
+      // this device before this brand-new account's (empty) Dashboard
+      // loads - see db_helper.dart's clearAllLocalData() for why this
+      // matters even for a fresh signup.
+      await DBHelper.instance.clearAllLocalData();
+
+      if (!mounted) return;
+
+      setState(() {
+        _isLoading = false;
+      });
+
       Navigator.of(context).pushReplacementNamed('/home');
     } else {
+      setState(() {
+        _isLoading = false;
+      });
       // Rare edge case: account was created but auto-login failed
       // (e.g. a network blip right after signup). Send them to the
       // Login screen to try manually rather than leaving them stuck.
