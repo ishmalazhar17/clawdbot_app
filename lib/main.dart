@@ -16,6 +16,7 @@ import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'notification_helper.dart';
 import 'auth_gate.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 // This is the very first function that runs in the whole app.
 // runApp() takes a widget and makes it fill the screen.
 //
@@ -25,6 +26,7 @@ void main() async {
   // Required whenever you call async code (like our notification
   // setup) before runApp() — Flutter needs this to be ready first.
   WidgetsFlutterBinding.ensureInitialized();
+    FlutterForegroundTask.initCommunicationPort();
 
   // Set up the notification system once, at app startup. This is
   // also when Android will show the "Allow notifications?" popup.

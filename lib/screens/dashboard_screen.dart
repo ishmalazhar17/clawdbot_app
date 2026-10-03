@@ -5,15 +5,17 @@
 // UPDATED Aug 24: added a gear icon in the AppBar that opens the new
 // Settings screen.
 //
-// UPDATED Sep 30: added a "Sync Now" button in the AppBar. Pulls the
-// latest data from the server (via CloudSyncService) and replaces
-// the local copy, so this phone catches up with anything that
-// happened on the server while it was offline or on another device.
+// UPDATED Sep 30: added a "Sync Now" button in the AppBar.
+//
+// UPDATED Oct 3: starts GeofenceService when the Dashboard loads, so
+// the app begins watching for nearby saved locations as soon as you
+// log in / open the app.
 // =====================================================================
 
 import 'package:flutter/material.dart';
 import '../db_helper.dart';
 import '../cloud_sync_service.dart';
+import '../geofence_service.dart';
 import 'settings_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -34,6 +36,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _loadDashboardData();
+    // ignore: unawaited_futures
+    GeofenceService.instance.start();
   }
 
   Future<void> _loadDashboardData() async {
@@ -44,9 +48,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final todayString =
         '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
 
-    // UPDATED Aug 27: excludes completed reminders from both
-    // sections - once you've checked something off, it shouldn't
-    // keep cluttering your daily overview.
     final todayList = allReminders
         .where((r) => r['date'] == todayString && r['completed'] != 1)
         .toList();
@@ -68,7 +69,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  // ---- NEW TODAY: pulls the latest data from the server ----
   Future<void> _handleSyncNow() async {
     setState(() {
       _syncing = true;
@@ -113,7 +113,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         title: const Text('Dashboard'),
         actions: [
-          // ---- NEW TODAY: Sync Now button ----
           IconButton(
             icon: _syncing
                 ? const SizedBox(
@@ -125,12 +124,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             tooltip: 'Sync Now',
             onPressed: _syncing ? null : _handleSyncNow,
           ),
-          // ---- NEW TODAY: gear icon that opens Settings ----
-          // Navigator.push adds a new screen ON TOP of the current
-          // one (with a back arrow to return), unlike the bottom nav
-          // tabs which SWAP the current screen entirely. This is the
-          // right choice for a screen you visit occasionally, like
-          // Settings, rather than one of your core daily tabs.
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () {

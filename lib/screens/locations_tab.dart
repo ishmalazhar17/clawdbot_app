@@ -13,11 +13,17 @@
 // actually pushed; deleting a server-known location that can't be
 // deleted right now (e.g. offline) gets queued in pending_deletes,
 // and the next "Sync Now" retries it automatically.
+//
+// UPDATED Oct 3 (geofencing): after saving a new location, runs an
+// immediate geofence check against the current position, so you can
+// test the "you're near a saved location" notification right away
+// instead of waiting to physically move 20m+.
 // =====================================================================
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../db_helper.dart';
+import '../geofence_service.dart';
 import '../cloud_sync_service.dart';
 
 class LocationsTab extends StatefulWidget {
@@ -68,13 +74,6 @@ class _LocationsTabState extends State<LocationsTab> {
     });
   }
 
-  // ---------------------------------------------------------------
-  // If this location never made it to the server (negative id),
-  // there's nothing to delete remotely - just remove it locally. If
-  // it's a real server-known location (positive id), try to delete
-  // it on the server now; if that fails (offline), queue it in
-  // pending_deletes so a future Sync Now retries the delete.
-  // ---------------------------------------------------------------
   Future<void> _deleteLocation(int id) async {
     await DBHelper.instance.deleteObjectLocation(id);
 
@@ -256,6 +255,12 @@ class _LocationsTabState extends State<LocationsTab> {
 
                     Navigator.pop(context);
                     _refreshLocations();
+
+                    // NEW: immediately check if we're near this (or
+                    // any other) saved location, instead of waiting
+                    // for the phone to move 20m+.
+                    // ignore: unawaited_futures
+                    GeofenceService.instance.checkNow();
                   },
                   child: const Text('Save'),
                 ),
